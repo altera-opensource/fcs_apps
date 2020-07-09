@@ -284,6 +284,7 @@ static int fcs_validate_hps_image_buf(const void *cdata, size_t csize,
 	dev_ioctl->com_paras.c_request.size = certsz;
 	dev_ioctl->com_paras.c_request.addr = pcert;
 	dev_ioctl->com_paras.c_request.test.test_bit = INTEL_FCS_NO_TEST;
+	dev_ioctl->com_paras.c_request.c_status = INTEL_CERT_STATUS_NONE;
 	dev_ioctl->status = -1;
 	if (verbose)
 		printf("ioctl size=%d, address=0x%p\n",
@@ -295,6 +296,10 @@ static int fcs_validate_hps_image_buf(const void *cdata, size_t csize,
 		dev_ioctl->status, dev_ioctl->com_paras.s_request.size);
 
 	status = dev_ioctl->status;
+	if (status)
+		printf("Certificate Error: 0x%X\n",
+			dev_ioctl->com_paras.c_request.c_status);
+
 	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 	free(dev_ioctl);
 
@@ -540,12 +545,17 @@ static int fcs_service_counter_set(char *filename, int test)
 	dev_ioctl->com_paras.c_request.addr = buffer;
 	dev_ioctl->com_paras.c_request.size = filesize;
 	dev_ioctl->com_paras.c_request.test.test_bit = test;
+	dev_ioctl->com_paras.c_request.c_status = INTEL_CERT_STATUS_NONE;
 	dev_ioctl->status = -1;
 
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_SEND_CERTIFICATE);
 
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 	status = dev_ioctl->status;
+
+	if (status)
+		printf("Certificate Error: 0x%X\n",
+			dev_ioctl->com_paras.c_request.c_status);
 
 	memset(buffer, 0, filesize);
 	free(buffer);
