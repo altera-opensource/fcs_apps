@@ -881,9 +881,6 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		return status;
 	}
 
-	if (verbose)
-		printf("Save encrypted data at %s\n", outfilename);
-
 	/* Save result in binary file */
 	fp = fopen(outfilename, "wbx");
 	if (!fp) {
@@ -896,6 +893,13 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		free(in_buf);
 		free(out_buf);
 		return -1;
+	}
+
+	if (verbose) {
+		printf("Save encrypted data to %s\n", outfilename);
+		printf("Saving %d [0x%X] bytes\n",
+			dev_ioctl->com_paras.d_encryption.dst_size,
+			dev_ioctl->com_paras.d_encryption.dst_size);
 	}
 
 	fwrite(dev_ioctl->com_paras.d_encryption.dst,
@@ -1038,6 +1042,13 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	aes_hdr = (struct fcs_aes_crypt_header *)out_buf;
 	if (verbose)
 		dump_aes_hdr(aes_hdr);
+
+	if (verbose) {
+		printf("Save decrypted data to %s\n", outfilename);
+		printf("Saving %d [0x%X] bytes\n",
+			(aes_hdr->data_len - aes_hdr->pad),
+			(aes_hdr->data_len - aes_hdr->pad));
+	}
 
 	/* Write out the data but skip the header */
 	fwrite(out_buf + sizeof(struct fcs_aes_crypt_header),
@@ -1259,7 +1270,9 @@ int main(int argc, char *argv[])
 		case 'd':
 			if (command == INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("ASOI needs command");
-			id = atoi(optarg);
+			id = strtoul(optarg, 0, 0);
+			if (errno)
+				error_exit("ASOI conversion error");
 			break;
 		case 'r':
 			if (command == INTEL_FCS_DEV_COMMAND_NONE)
