@@ -47,7 +47,6 @@ static const struct option opts[] = {
 	{"key", no_argument, NULL, 'K'},
 	{"test", required_argument, NULL, 't'},
 	{"counter", required_argument, NULL, 'c'},
-	{"base", no_argument, NULL, 'b'},
 	{"select", required_argument, NULL, 's'},
 	{"key_type", required_argument, NULL, 'k'},
 	{"key_id", required_argument, NULL, 'i'},
@@ -72,11 +71,13 @@ static void fcs_prepare_usage(void)
 	printf("--- Crypto Services Configure Tool Usage ---\n");
 	printf("%-32s  %s", "-H|--hps_cert <HPS_image_filename>\n",
 	       "Create the unsigned certificate for an HPS VAB image.\n\n");
-	printf("%-32s  %s %s", "-C|--counter_set -s <counter_select> -c <counter_value> [--base]\n",
+	printf("%-32s  %s %s %s", "-C|--counter_set -s <counter_select> -c <counter_value>\n",
 	       "Create the unsigned certificate for a Counter Set command.\n",
-	       "if --base && counter == 1, set base of big counter\n\n");
-	printf("%-32s  %s", "-K|--key -k|--key_type <user(0)/intel(1)> -i|--key_id <key_id> [-r|--roothash <filename>]\n",
-	       "Create the unsigned certificate for a Key Cancellation command.\n\n");
+	       "if counter_set == 1, set Big Counter to counter_value (range 0 to 494)\n",
+	       "if counter_set == 2-5, set Security Version Counter to counter_value (range 0 to 63)\n\n");
+	printf("%-32s  %s %s", "-K|--key -k|--key_type <user(0)/intel(1)> -i|--key_id <key_id> [-r|--roothash <filename>]\n",
+	       "Create the unsigned certificate for a Key Cancellation command.\n",
+	       "For User Key, roothash selects User Root Hash, Key ID can be 0 to 31.\n\n");
 	printf("%-32s  %s %s", "-F|--finish <signed_certificate> [-f|--imagefile <HPS_image_filename>]\n",
 	       "Concatentate the size to the certificate. If supplied, concatenate signed certficate to HPS VAB image.\n",
 	       "Output result is saved in filename = hps_image_signed.vab\n\n");
@@ -445,14 +446,13 @@ static int fcs_prepare_image(char *filename, int fcs_type, bool verbose)
  * fcs_prepare_counter() - create an unsigned counter certificate
  * @counter_select: Which counter to set (1 to 5)
  * @counter_val: Value to set counter to
- * @base: If true, this is to change the base value of the big counter.
  * @verbose: If true, print verbose output
  *
  * Return: 0 on success, or error on failure
  *
  */
 static int fcs_prepare_counter(uint8_t counter_select, uint32_t counter_val,
-			       bool base, bool verbose)
+			       bool verbose)
 {
 	struct fcs_counter_set_data fcs_data;
 	int ret;
@@ -460,8 +460,7 @@ static int fcs_prepare_counter(uint8_t counter_select, uint32_t counter_val,
 	memset(&fcs_data, 0, sizeof(fcs_data));
 	/* Fill in the fcs_data structure */
 	fcs_data.select.counter_type = counter_select;
-	fcs_data.select.subcounter_type =
-		base ? FCS_BASE_COUNTER : FCS_INCREMENT_COUNTER;
+	fcs_data.select.subcounter_type = 0;
 	/* Key Cancellation Request? */
 	fcs_data.fcs_counter_value = counter_val;
 
@@ -565,7 +564,7 @@ static void error_exit(char *msg)
 
 int main(int argc, char *argv[])
 {
-	bool verbose = false, counter_base = false;
+	bool verbose = false;
 	char *filename = NULL, *hpsfile =  NULL;
 	int counter_val = -1, counter_sel = -1;
 	int key_type = -1, key_id = 0xFF;
@@ -595,11 +594,6 @@ int main(int argc, char *argv[])
 			if (type != FCS_IMAGE_COUNTER_SET)
 				error_exit("Wrong command. Only Counter Set Allowed");
 			counter_sel = atoi(optarg);
-			break;
-		case 'b':
-			if (type != FCS_IMAGE_COUNTER_SET)
-				error_exit("Wrong command. Only Counter Set Allowed");
-			counter_base = true;
 			break;
 		case 'K':
 			type = FCS_IMAGE_KEY_CANCEL;
@@ -666,17 +660,13 @@ int main(int argc, char *argv[])
 			error_exit("Invalid Counter Select parameter (Must be 1 to 5)");
 		if ((counter_sel > 1) && (counter_val > 63))
 			error_exit("Invalid Counter Value parameter (Counter value must be from 0 to 63)");
-		if ((counter_base) && (counter_sel != 1))
-			error_exit("Invalid Counter Base parameter (Counter Select must be 1)");
-		if ((counter_sel == 1) && (counter_base) && (counter_val > 255))
-			error_exit("Invalid Counter Base parameter (Counter value must be from 0 to 255)");
-		if ((!counter_base) && (counter_val > 494))
-			error_exit("Invalid Counter Increment parameter (Counter value must be from 0 to 494)");
+		if ((counter_sel == 1) && (counter_val > 494))
+			error_exit("Invalid Big Counter parameter (Counter value must be from 0 to 494)");
 
 		if (verbose)
-			printf("%s[%d] Counter Set: type=%d, counter_sel=%d, counter_val=0x%x\n",
-				__func__, __LINE__, type, counter_sel, counter_val);
-		fcs_prepare_counter(counter_sel, counter_val, counter_base, verbose);
+			printf("%s[%d] Counter Set: counter_sel=%d, counter_val=0x%x\n",
+				__func__, __LINE__, counter_sel, counter_val);
+		fcs_prepare_counter(counter_sel, counter_val, verbose);
 	} else if (type == FCS_IMAGE_KEY_CANCEL) {
 		if (key_type == -1)
 			error_exit("Key Type parameter not set");
@@ -690,6 +680,8 @@ int main(int argc, char *argv[])
 			error_exit("Roothash filename only valid for User Keys");
 		if ((key_type == FCS_USER_KEY) && !filename)
 			error_exit("Roothash filename required for User Keys");
+		if ((key_type == FCS_USER_KEY) && (key_id > 31))
+			error_exit("Invalid Key ID parameter (Must be in range 0 to 31)");
 
 		fcs_prepare_key(key_type, key_id, filename, verbose);
 	} else {

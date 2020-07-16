@@ -92,16 +92,14 @@ struct fcs_counter_set_flags {
  * struct fcs_counter_sel - structure of the counter_select
  * @rsvd: Reserved (write as 0)
  * @counter_type: Select the counter type
- *	0 = Explicit Key cancellation
- *	1-5 = Valid counter select are from 1 to 5
+ *	0 = Explicit Key cancellation ID
+ *	1 = Big Counter select
+ *	2-5 = Security Version counter select
  *	255 = Cancel Owner Root Hash (255)
  * @subcounter_type: Select the subcounter type/Key Cancel
  *	When counter_type == 0:
  *		0 = User explicit key cancel (0)
  *		1 = Intel explicit key cancel (1)
- *	When counter_type == 1:
- *		0 = Select Incremental Portion of counter
- *		1 = Select the Base counter
  */
 struct fcs_counter_sel {
 #ifdef LITTLE_ENDIAN
@@ -125,14 +123,12 @@ struct fcs_counter_sel {
  * @fcs_counter_value:
  *	If select.counter_type is 0, this is for explicit user cancellation.
  *	   The value range shall be from 0 to 31.
- *	If select.counter_type is 1 and select.sub_counter_type == 1, this
- *	   is the base counter. The value range is from 0 to 255.
- *	If select.counter_type is 1 and select.sub_counter_type == 0, this
- *	   is the incremental counter. The value range is from 0 to 494.
- *	If counter sel is 2 to 5, these are the small counters
- *	   The value range is from 0 to 63.
- * @user_root_hash: if select.counter_type is 0, this is the root hash.
- *		    otherwise, reserved (write as 0)
+ *	If select.counter_type is 1, the value range is from 0 to 494.
+ *	If counter sel is 2 to 5, these are the small Security Version
+ *	   counters. The value range is from 0 to 63.
+ * @user_root_hash: only valid if select.counter_type is 255 OR
+ *	   select.counter_type is 0 and select.subcounter_type is 0.
+ *	   Otherwise, reserved (write as 0)
  * @cert_sign_keychain: Certificate Signing Keychain
  */
 struct fcs_counter_set_data {
