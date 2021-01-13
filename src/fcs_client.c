@@ -663,9 +663,11 @@ static int fcs_service_get_provision_data(char *filename, int prnt)
 		char no_hash_str[] = "None";
 		char type256_hash_str[] = "secp256r1";
 		char type384_hash_str[] = "secp384r1";
-		int number_hashes = hdr->num_hashes;
+		int number_hashes = hdr->num_hashes + 1;
 		char *type_hash_str = no_hash_str;
 
+		printf("W0:Provision Status Code: 0x%X\n",
+			hdr->provision_status);
 		printf("W1:Key Cancellation Status: 0x%X\n",
 			hdr->intel_key_status);
 		printf("W2:Co-Sign Status:          %d\n",
