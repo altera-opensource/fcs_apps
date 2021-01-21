@@ -34,12 +34,10 @@ enum fcs_certificate_test {
 
 /**
  * struct intel_fcs_cert_test_word - certificate test word
- * @test_bit: if set, do not write fuses, write to cache only.
- * @rsvd: write as 0
+ * @test_word: firmware request test word be set to zero
  */
 struct intel_fcs_cert_test_word {
-	__u32	test_bit:1;
-	__u32	rsvd:31;
+	__u32	test_word;
 };
 
 /**

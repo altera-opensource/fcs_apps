@@ -283,7 +283,7 @@ static int fcs_validate_hps_image_buf(const void *cdata, size_t csize,
 	/* Passed hash comparison so continue */
 	dev_ioctl->com_paras.c_request.size = certsz;
 	dev_ioctl->com_paras.c_request.addr = pcert;
-	dev_ioctl->com_paras.c_request.test.test_bit = INTEL_FCS_NO_TEST;
+	dev_ioctl->com_paras.c_request.test.test_word = INTEL_FCS_NO_TEST;
 	dev_ioctl->com_paras.c_request.c_status = INTEL_CERT_STATUS_NONE;
 	dev_ioctl->status = -1;
 	if (verbose)
@@ -544,7 +544,7 @@ static int fcs_service_counter_set(char *filename, int test)
 	/* Fill in the structure */
 	dev_ioctl->com_paras.c_request.addr = buffer;
 	dev_ioctl->com_paras.c_request.size = filesize;
-	dev_ioctl->com_paras.c_request.test.test_bit = test;
+	dev_ioctl->com_paras.c_request.test.test_word = (test<<31);
 	dev_ioctl->com_paras.c_request.c_status = INTEL_CERT_STATUS_NONE;
 	dev_ioctl->status = -1;
 
