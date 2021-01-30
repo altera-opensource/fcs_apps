@@ -750,6 +750,10 @@ static void dump_aes_hdr(struct fcs_aes_crypt_header *aes_hdr)
 
 	printf("\n");
 	printf("Header Padding: 0x%X\n", aes_hdr->hdr_pad);
+	printf("IV field: ");
+	for (i = 0; i < sizeof(aes_hdr->iv_field); i++)
+		printf("%02x ", aes_hdr->iv_field[i]);
+	printf("\n");
 }
 
 /*
@@ -846,6 +850,9 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		own >>= 8;
 	}
 	aes_hdr->hdr_pad = 0x01020304;
+	/* to initialize for the generated IV */
+	for (i = 0; i < sizeof(aes_hdr->iv_field); i++)
+		aes_hdr->iv_field[i] = 0;
 
 	if (verbose)
 		dump_aes_hdr(aes_hdr);

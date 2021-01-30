@@ -299,6 +299,7 @@ struct fcs_get_provision_data {
  * @app_spec_obj_info: Application Specific Object Info
  * @owner_id: Used for key derivation
  * @hdr_pad: Header Padding: 0x01020304
+ * @iv_field: output data to store the generated IV
  */
 struct fcs_aes_crypt_header {
 	uint32_t  magic_number;
@@ -308,6 +309,7 @@ struct fcs_aes_crypt_header {
 	uint16_t  app_spec_obj_info;
 	uint8_t   owner_id[8];
 	uint32_t  hdr_pad;
+	uint8_t  iv_field[16];
 };
 
 /*
