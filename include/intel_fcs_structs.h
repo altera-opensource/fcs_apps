@@ -25,8 +25,18 @@
 #define FCS_INCREMENT_COUNTER	0
 #define FCS_BASE_COUNTER	1
 
-#define SDOS_MIN_SZ		16
-#define SDOS_MAX_SZ		32672	/* 32K - 96 bytes */
+#define SDOS_PLAINDATA_MIN_SZ	32
+#define SDOS_PLAINDATA_MAX_SZ	32672
+
+#define SDOS_HEADER_SZ		40
+#define SDOS_HMAC_SZ		48
+#define SDOS_PADDING_SZ		8
+
+#define SDOS_DECRYPTED_MIN_SZ	(SDOS_PLAINDATA_MIN_SZ + SDOS_HEADER_SZ)
+#define SDOS_DECRYPTED_MAX_SZ	(SDOS_PLAINDATA_MAX_SZ + SDOS_HEADER_SZ)
+
+#define SDOS_ENCRYPTED_MIN_SZ	(SDOS_PLAINDATA_MIN_SZ + SDOS_HEADER_SZ + SDOS_HMAC_SZ + SDOS_PADDING_SZ)
+#define SDOS_ENCRYPTED_MAX_SZ	(SDOS_PLAINDATA_MAX_SZ + SDOS_HEADER_SZ + SDOS_HMAC_SZ + SDOS_PADDING_SZ)
 
 /*
  * struct fcs_hps_generic_header
@@ -310,50 +320,6 @@ struct fcs_aes_crypt_header {
 	uint8_t   owner_id[8];
 	uint32_t  hdr_pad;
 	uint8_t  iv_field[16];
-};
-
-/*
- * struct fcs_aes_decrypted_buffer - buffer layout
- * @header: Header information (magic = 0xACBDBDED)
- * @data: data to encrypt or decrypt. Must be from 16 to 32K-96
- *	granularity of 16bytes.
- */
-struct fcs_aes_decrypt_buffer {
-	struct fcs_aes_crypt_header header;
-	uint8_t   data[SDOS_MAX_SZ];
-};
-
-/*
- * struct fcs_aes_encrypted_header
- * @header: Header information (magic = 0x53424112)
- * @encrypt_iv: Initialization Vector used for encryption
- */
-struct fcs_aes_encrypted_header {
-	struct fcs_aes_crypt_header header;
-	uint8_t  encryp_iv[16];
-};
-
-/*
- * struct fcs_aes_encrypt_hash
- * @hmac_sha384: HMAC(SHA(data))
- */
-struct fcs_aes_encrypt_hash {
-	uint8_t  hmac_sha384[SHA384_SZ];
-};
-
-/*
- * struct fcs_aes_encrypted_buffer
- * @header: Header information (magic = 0x53424112)
- * @data: Data may be up to 32672 bytes but can be shorter in
- *	increments of 16 bytes. hmac_sha384 is appended at
- *	end of data. Note: the data size is just a placeholder
- *	for the maximum size.
- * @hmac_sha384: HMAC SHA at end of data.
- */
-struct fcs_aes_encrypt_buffer {
-	struct fcs_aes_encrypted_header header;
-	uint8_t  data[SDOS_MAX_SZ];
-	struct fcs_aes_encrypt_hash hmac_sha384;
 };
 
 #endif

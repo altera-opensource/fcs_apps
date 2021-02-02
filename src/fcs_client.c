@@ -25,7 +25,6 @@
 #include "tools/imagetool.h"
 
 #define MAX_CERT_SIZE		(4 * 1024)
-#define MAX_AES_BUF_SZ		(32768)
 
 #define SEARCH_CHUNKSIZE	sizeof(struct fcs_hps_vab_certificate_header)
 #define CERT_LEN_PARAM_SZ	sizeof(uint32_t)
@@ -799,7 +798,8 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
 
 	/* Make sure the data is less than 32K - 96 bytes */
-	if ((filesize > SDOS_MAX_SZ) || (filesize < SDOS_MIN_SZ)) {
+	if (filesize > SDOS_PLAINDATA_MAX_SZ ||
+	    filesize < SDOS_PLAINDATA_MIN_SZ) {
 		fprintf(stderr, "Invalid filesize %ld. Must be > 16 and <= 32,672\n",
 			filesize);
 		fclose(fp);
@@ -807,7 +807,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	}
 
 	/* Allocate a buffer for the input data */
-	in_buf = calloc(MAX_AES_BUF_SZ, sizeof(uint8_t));
+	in_buf = calloc(SDOS_DECRYPTED_MAX_SZ, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			filename, strerror(errno));
@@ -815,7 +815,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		return -1;
 	}
 	/* Allocate a buffer for the output data */
-	out_buf = calloc(MAX_AES_BUF_SZ, sizeof(uint8_t));
+	out_buf = calloc(SDOS_ENCRYPTED_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			outfilename, strerror(errno));
@@ -829,7 +829,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	fclose(fp);
 	if (sz != filesize) {
 		fprintf(stderr, "can't read entire file %s\n", filename);
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -861,7 +861,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -872,7 +872,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	dev_ioctl->com_paras.d_encryption.src_size = filesize + pad +
 					 sizeof(struct fcs_aes_crypt_header);
 	dev_ioctl->com_paras.d_encryption.dst = out_buf;
-	dev_ioctl->com_paras.d_encryption.dst_size = MAX_AES_BUF_SZ;
+	dev_ioctl->com_paras.d_encryption.dst_size = SDOS_ENCRYPTED_MAX_SZ;
 	dev_ioctl->status = -1;
 
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_DATA_ENCRYPTION);
@@ -881,8 +881,8 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 
 	if (status) {
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
-		memset(out_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
@@ -897,8 +897,8 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 			outfilename, strerror(errno));
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 		free(dev_ioctl);
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
-		memset(out_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -915,8 +915,8 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	       dev_ioctl->com_paras.d_encryption.dst_size, 1, fp);
 
 	fclose(fp);
-	memset(in_buf, 0, MAX_AES_BUF_SZ);
-	memset(out_buf, 0, MAX_AES_BUF_SZ);
+	memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+	memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 	free(in_buf);
 	free(out_buf);
 	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
@@ -965,7 +965,8 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
 
 	/* Make sure the data is less than 32K - 96 bytes */
-	if ((filesize > SDOS_MAX_SZ) || (filesize < SDOS_MIN_SZ)) {
+	if (filesize > SDOS_ENCRYPTED_MAX_SZ ||
+	    filesize < SDOS_ENCRYPTED_MIN_SZ) {
 		fprintf(stderr, "Invalid filesize %ld. Must be > 16 and <= 32,672\n",
 			filesize);
 		fclose(fp);
@@ -973,7 +974,7 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	}
 
 	/* Allocate a buffer for the input data */
-	in_buf = calloc(MAX_AES_BUF_SZ, sizeof(uint8_t));
+	in_buf = calloc(SDOS_ENCRYPTED_MAX_SZ, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			filename, strerror(errno));
@@ -981,7 +982,7 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 		return -1;
 	}
 	/* Allocate a buffer for the output data */
-	out_buf = calloc(MAX_AES_BUF_SZ, sizeof(uint8_t));
+	out_buf = calloc(SDOS_DECRYPTED_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			outfilename, strerror(errno));
@@ -996,7 +997,7 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	if (sz != filesize) {
 		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 			sz, filesize, filename, strerror(errno));
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -1006,7 +1007,7 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -1016,7 +1017,7 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	dev_ioctl->com_paras.d_decryption.src = in_buf;
 	dev_ioctl->com_paras.d_decryption.src_size = filesize;
 	dev_ioctl->com_paras.d_decryption.dst = out_buf;
-	dev_ioctl->com_paras.d_decryption.dst_size = MAX_AES_BUF_SZ;
+	dev_ioctl->com_paras.d_decryption.dst_size = SDOS_DECRYPTED_MAX_SZ;
 	dev_ioctl->status = -1;
 
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_DATA_DECRYPTION);
@@ -1025,8 +1026,8 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 
 	if (status) {
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
-		memset(out_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
@@ -1041,8 +1042,8 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 			outfilename, strerror(errno));
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 		free(dev_ioctl);
-		memset(in_buf, 0, MAX_AES_BUF_SZ);
-		memset(out_buf, 0, MAX_AES_BUF_SZ);
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);
 		free(out_buf);
 		return -1;
@@ -1064,8 +1065,8 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	       (aes_hdr->data_len - aes_hdr->pad), 1, fp);
 
 	fclose(fp);
-	memset(in_buf, 0, MAX_AES_BUF_SZ);
-	memset(out_buf, 0, MAX_AES_BUF_SZ);
+	memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+	memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 	free(in_buf);
 	free(out_buf);
 	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
