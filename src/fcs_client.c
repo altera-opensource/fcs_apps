@@ -60,7 +60,6 @@ static const struct option opts[] = {
 	{"own_hash", required_argument, NULL, 'r'},
 	{"own_id", required_argument, NULL, 'd'},
 	{"random", required_argument, NULL, 'R'},
-	{"version_lx", no_argument, NULL, 'L'},
 	{"verbose", required_argument, NULL, 'v'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
@@ -89,8 +88,6 @@ static void fcs_client_usage(void)
 	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
 	printf("%-32s  %s", "-R|--random <output_filename>\n",
 	       "\tReturn up to a 32-byte of random data\n\n");
-	printf("%-32s  %s", "-L|--version_lx",
-	       "Return version of the Linux Driver\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1133,40 +1130,6 @@ static int fcs_random_number(char *filename, bool verbose)
 }
 
 /*
- * get_driver_version() - get the driver version
- *
- * Return: 0 on success, or error on failure
- */
-static int get_driver_version(void)
-{
-	struct intel_fcs_dev_ioctl *dev_ioctl;
-	int status;
-
-	printf("Requesting Version Number\n");
-	dev_ioctl = (struct intel_fcs_dev_ioctl *)
-			malloc(sizeof(struct intel_fcs_dev_ioctl));
-	if (!dev_ioctl) {
-		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
-		return -1;
-	}
-
-	dev_ioctl->status = -1;
-
-	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_VERSION_REQUEST);
-
-	printf("status=%d\n", dev_ioctl->status);
-	printf("Version is : 0x%X, Flags = 0x%X\n",
-		dev_ioctl->com_paras.version.version,
-		dev_ioctl->com_paras.version.flags);
-
-	status = dev_ioctl->status;
-	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
-	free(dev_ioctl);
-
-	return status;
-}
-
-/*
  * error_exit()
  * @msg: the message error
  *
@@ -1190,7 +1153,7 @@ int main(int argc, char *argv[])
 	char *endptr;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvLEDR:t:V:C:G:G:o:d:i:r:c:",
+	while ((c = getopt_long(argc, argv, "phvEDR:t:V:C:G:G:o:d:i:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1234,11 +1197,6 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_RANDOM_NUMBER_GEN_CMD;
 			filename = optarg;
-			break;
-		case 'W':
-			if (command != INTEL_FCS_DEV_COMMAND_NONE)
-				error_exit("Only one command allowed");
-			command = INTEL_FCS_DEV_VERSION_CMD;
 			break;
 		case 'v':
 			verbose = true;
@@ -1307,9 +1265,6 @@ int main(int argc, char *argv[])
 		if (!filename)
 			error_exit("Missing filename to save Provision Data");
 		ret = fcs_service_get_provision_data(filename, prnt);
-		break;
-	case INTEL_FCS_DEV_VERSION_CMD:
-		ret = get_driver_version();
 		break;
 	case INTEL_FCS_DEV_DATA_ENCRYPTION_CMD:
 		if (!filename || !outfilename)
