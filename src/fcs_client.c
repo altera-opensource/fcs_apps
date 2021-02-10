@@ -61,7 +61,6 @@ static const struct option opts[] = {
 	{"own_id", required_argument, NULL, 'd'},
 	{"random", required_argument, NULL, 'R'},
 	{"version_lx", no_argument, NULL, 'L'},
-	{"size", required_argument, NULL, 's'},
 	{"verbose", required_argument, NULL, 'v'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
@@ -88,8 +87,8 @@ static void fcs_client_usage(void)
 	       "\tand Applications Specific Object Info(unique 2 byte identifier)\n\n");
 	printf("%-32s  %s", "-D|--aes_decrypt -i <input_filename> -o|--out_filename <output_filename>\n",
 	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
-	printf("%-32s  %s", "-R|--random <output_filename> --size <num_bytes_to_return>\n",
-	       "\tReturn up to 32 bytes of random data\n\n");
+	printf("%-32s  %s", "-R|--random <output_filename>\n",
+	       "\tReturn up to a 32-byte of random data\n\n");
 	printf("%-32s  %s", "-L|--version_lx",
 	       "Return version of the Linux Driver\n\n");
 	printf("%-32s  %s", "-v|--verbose",
@@ -1078,20 +1077,16 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 /*
  * trng_random_number() - get a random number
  * @filename: Filename to save result into.
- * @size: Number of bytes (up to 32) to save.
  * @verbose: verbosity of output (true = more output)
  *
  * Return: 0 on success, or error on failure
  */
-static int fcs_random_number(char *filename, int size, bool verbose)
+static int fcs_random_number(char *filename, bool verbose)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
 	int status;
 	FILE *fp;
 	int i;
-
-	if (verbose)
-		printf("Requesting %d random bytes\n", size);
 
 	dev_ioctl = (struct intel_fcs_dev_ioctl *)
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
@@ -1188,14 +1183,14 @@ int main(int argc, char *argv[])
 	enum intel_fcs_command_code command = INTEL_FCS_DEV_COMMAND_NONE;
 	char *filename = NULL, *outfilename = NULL;
 	int ret = 0, c, index = 0, prnt = 0;
-	int size = -1, type = -1;
+	int type = -1;
 	int32_t test = -1;
 	uint64_t own = 0;
 	int16_t id = 0;
 	char *endptr;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvLEDR:t:V:C:G:G:s:o:d:i:r:c:",
+	while ((c = getopt_long(argc, argv, "phvLEDR:t:V:C:G:G:o:d:i:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1244,15 +1239,6 @@ int main(int argc, char *argv[])
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_VERSION_CMD;
-			break;
-		case 's':
-			if (size != -1)
-				error_exit("Only one size allowed");
-			if (command != INTEL_FCS_DEV_RANDOM_NUMBER_GEN_CMD)
-				error_exit("Only RNG can have size");
-			size = atoi(optarg);
-			if (size < 0)
-				error_exit("Invalid size");
 			break;
 		case 'v':
 			verbose = true;
@@ -1308,9 +1294,7 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_RANDOM_NUMBER_GEN_CMD:
 		if (!filename)
 			error_exit("Missing filename to save data into");
-		if (size == -1)
-			error_exit("Incorrect size");
-		ret = fcs_random_number(filename, size, verbose);
+		ret = fcs_random_number(filename, verbose);
 		break;
 	case INTEL_FCS_DEV_COUNTER_SET_CMD:
 		if (!filename)
