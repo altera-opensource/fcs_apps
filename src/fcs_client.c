@@ -137,11 +137,11 @@ static int fcs_send_ioctl_request(struct intel_fcs_dev_ioctl *dev_ioctl,
  * Return: 0 on failure, size of image (w/o cert) on success
  *
  */
-static size_t get_img_size(uint8_t *img_buf, size_t img_buf_sz)
+static size_t get_img_size(const uint8_t *img_buf, size_t img_buf_sz)
 {
-	uint8_t *img_buf_end = img_buf + img_buf_sz;
-	uint32_t cert_sz = *(uint32_t *)(img_buf_end - CERT_LEN_PARAM_SZ);
-	uint8_t *p = img_buf_end - cert_sz - CERT_LEN_PARAM_SZ;
+	const uint8_t *img_buf_end = img_buf + img_buf_sz;
+	const uint32_t cert_sz = *(uint32_t *)(img_buf_end - CERT_LEN_PARAM_SZ);
+	const uint8_t *p = img_buf_end - cert_sz - CERT_LEN_PARAM_SZ;
 
 	/* Ensure p is pointing within the hps_buf */
 	if (p < img_buf || p > (img_buf_end - CERT_LEN_PARAM_SZ))
@@ -162,7 +162,7 @@ static size_t get_img_size(uint8_t *img_buf, size_t img_buf_sz)
  * Return: 0 on success of hash calculation, or error on failure
  *
  */
-static int calc_fit_image_hash(uint8_t *hps_buf, size_t hps_bufsize,
+static int calc_fit_image_hash(const uint8_t *hps_buf, size_t hps_bufsize,
 			       uint8_t *hash_buf)
 {
 	struct sha384_ctx sha384;
@@ -242,7 +242,7 @@ static int fcs_validate_hps_image_buf(const void *cdata, size_t csize,
 {
 	struct fcs_hps_vab_certificate_header *pcert;
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	uint8_t *data = cdata;
+	const uint8_t *data = cdata;
 	uint8_t hash[SHA512_DIGEST_SIZE];
 	size_t certsz, datasz;
 	int status;
