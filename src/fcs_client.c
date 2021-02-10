@@ -1153,7 +1153,7 @@ int main(int argc, char *argv[])
 	char *endptr;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvEDR:t:V:C:G:G:o:d:i:r:c:",
+	while ((c = getopt_long(argc, argv, "phvEDR:t:V:C:G:o:d:i:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
