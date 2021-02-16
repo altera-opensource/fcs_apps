@@ -572,8 +572,12 @@ static int print_hash_data(struct fcs_get_provision_data *gpd,
 			   struct fcs_get_counters_data **pcntrs)
 {
 	int i;
+	int number_of_hashes;
 
-	for (i = 0; i < gpd->header.num_hashes; i++) {
+	number_of_hashes = gpd->header.num_hashes + 1;
+	printf("number of hashes is %d\n", number_of_hashes);
+
+	for (i = 0; i < number_of_hashes; i++) {
 		uint32_t *p_cancel_status;
 		uint8_t *p_hash;
 		int hash_sz;
@@ -597,10 +601,10 @@ static int print_hash_data(struct fcs_get_provision_data *gpd,
 	/* Set the counter pointer to the end of data */
 	if (gpd->header.type_hash == INTEL_FCS_HASH_SECP256)
 		*pcntrs = (struct fcs_get_counters_data *)
-			&(gpd->hash_256[gpd->header.num_hashes]);
+			&(gpd->hash_256[number_of_hashes]);
 	else if (gpd->header.type_hash == INTEL_FCS_HASH_SECP384R1)
 		*pcntrs = (struct fcs_get_counters_data *)
-			&(gpd->hash_384[gpd->header.num_hashes]);
+			&(gpd->hash_384[number_of_hashes]);
 
 	return 0;
 }
