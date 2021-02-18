@@ -61,6 +61,10 @@ static const struct option opts[] = {
 	{"own_id", required_argument, NULL, 'd'},
 	{"random", required_argument, NULL, 'R'},
 	{"verbose", required_argument, NULL, 'v'},
+	{"psgsigma_teardown", no_argument, NULL, 'T'},
+	{"get_chipid", no_argument, NULL, 'I'},
+	{"get_subkey", no_argument, NULL, 'S'},
+	{"get_measurement", no_argument, NULL, 'M'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -88,6 +92,13 @@ static void fcs_client_usage(void)
 	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
 	printf("%-32s  %s", "-R|--random <output_filename>\n",
 	       "\tReturn up to a 32-byte of random data\n\n");
+	printf("%-32s  %s", "-T|--psgsigma_teardown\n",
+	       "Remove all previous black key provision sessions and delete keys assocated with those sessions\n\n");
+	printf("%-32s  %s", "-I|--get_chipid", "get the device chipID\n\n");
+	printf("%-32s  %s", "-S|--get_subkey -i <in_filename> -o <out_filename>\n",
+	       "\tGet the FPGA attestation subkey\n\n");
+	printf("%-32s  %s", "-M|--get_measurement -i <in_filename> -o <out_filename>\n",
+	       "\tGet the FPGA attestation measurement\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1134,6 +1145,337 @@ static int fcs_random_number(char *filename, bool verbose)
 }
 
 /*
+ * fcs_psgsigma_teardown - teardown the previous provision session
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_psgsigma_teardown(void)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = 0;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl->status = -1;
+	dev_ioctl->com_paras.tdown.teardown = true;
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_PSGSIGMA_TEARDOWN);
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	ret = dev_ioctl->status;
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
+/*
+ * fcs_get_chip_id() - get device chip ID
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_get_chip_id(void)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = 0;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl->status = -1;
+	dev_ioctl->com_paras.c_id.chip_id_low = 0xffffffff;
+	dev_ioctl->com_paras.c_id.chip_id_high = 0xffffffff;
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CHIP_ID);
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	printf("device chipID[low]=0x%08x, chipID[high]=0x%08x\n",
+	       dev_ioctl->com_paras.c_id.chip_id_low,
+	       dev_ioctl->com_paras.c_id.chip_id_high);
+
+	ret = dev_ioctl->status;
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
+/*
+ * fcs_get_subkey() - get FPGA attestation subkey
+ * @filename: filename holding attestation subkey commands
+ * @outfilename: filename holding attestation subkey responses
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_get_subkey(char *filename, char *outfilename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	size_t filesize, sz;
+	struct stat st;
+	FILE *fp;
+	int ret = -1;
+
+	/* Open input binary file */
+	fp = fopen(filename, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			filename, strerror(errno));
+		return ret;
+	}
+
+	/* Get the file stattistics */
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		return ret;
+	}
+
+	/* Find the file size */
+	filesize = st.st_size;
+	if (verbose)
+		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
+
+	/* make sure size is less than 4K-4 bytes */
+	if (filesize > ATTESTATION_SUBKEY_CMD_MAX_SZ) {
+		fprintf(stderr, "Invalid filesize %ld. Must less then 4K-4 bytes\n",
+			filesize);
+		fclose(fp);
+		return ret;
+	}
+
+	/* allocate a buffer for the input data */
+	in_buf = calloc(ATTESTATION_SUBKEY_CMD_MAX_SZ, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			 filename, strerror(errno));
+		fclose(fp);
+		return ret;
+	}
+
+	/* allocate a buffer for the output data */
+	out_buf = calloc(ATTESTATION_SUBKEY_RSP_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			outfilename, strerror(errno));
+		free(in_buf);
+		fclose(fp);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, filesize, fp);
+	fclose(fp);
+	if (sz != filesize) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, filesize, filename, strerror(errno));
+		memset(in_buf, 0, ATTESTATION_SUBKEY_CMD_MAX_SZ);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		memset(in_buf, 0, ATTESTATION_SUBKEY_CMD_MAX_SZ);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl->com_paras.subkey.resv.resv_word = 0;
+	dev_ioctl->com_paras.subkey.cmd_data = in_buf;
+	dev_ioctl->com_paras.subkey.cmd_data_sz = filesize;
+	dev_ioctl->com_paras.subkey.rsp_data = out_buf;
+	dev_ioctl->com_paras.subkey.rsp_data_sz = ATTESTATION_SUBKEY_RSP_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_ATTESTATION_SUBKEY);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(in_buf, 0, ATTESTATION_SUBKEY_CMD_MAX_SZ);
+		memset(out_buf, 0, ATTESTATION_SUBKEY_RSP_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save output responses to the file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(in_buf, 0, ATTESTATION_SUBKEY_CMD_MAX_SZ);
+		memset(out_buf, 0, ATTESTATION_SUBKEY_RSP_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.subkey.rsp_data,
+	       dev_ioctl->com_paras.subkey.rsp_data_sz, 1, fp);
+
+	fclose(fp);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	memset(in_buf, 0, ATTESTATION_SUBKEY_CMD_MAX_SZ);
+	memset(out_buf, 0, ATTESTATION_SUBKEY_RSP_MAX_SZ);
+	free(dev_ioctl);
+	free(out_buf);
+	free(in_buf);
+
+	return ret;
+}
+
+/*
+ * fcs_get_measure() - get FPGA attestation measurement
+ * @filename: filename holding attestation measurement commands
+ * @outfilename: filename holding attestation measurement responses
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	size_t filesize, sz;
+	struct stat st;
+	FILE *fp;
+	int ret = -1;
+
+	/* Open input binary file */
+	fp = fopen(filename, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			filename, strerror(errno));
+		return ret;
+	}
+
+	/* Get the file stattistics */
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		return ret;
+	}
+
+	/* Find the file size */
+	filesize = st.st_size;
+	if (verbose)
+		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
+
+	 /* make sure size is less than 4K-4 bytes */
+	if (filesize > ATTESTATION_MEASUREMENT_CMD_MAX_SZ) {
+		fprintf(stderr, "Invalid filesize %ld. Must less then 4K-4 bytes\n",
+			filesize);
+		return ret;
+	}
+
+	/* allocate a buffer for the input data */
+	in_buf = calloc(ATTESTATION_MEASUREMENT_CMD_MAX_SZ, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		fclose(fp);
+		return ret;
+	}
+
+	/* allocate a buffer for the output data */
+	out_buf = calloc(ATTESTATION_MEASUREMENT_RSP_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			outfilename, strerror(errno));
+		free(in_buf);
+		fclose(fp);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, filesize, fp);
+	fclose(fp);
+	if (sz != filesize) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, filesize, filename, strerror(errno));
+		memset(in_buf, 0, ATTESTATION_MEASUREMENT_CMD_MAX_SZ);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		memset(in_buf, 0, ATTESTATION_MEASUREMENT_CMD_MAX_SZ);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl->com_paras.measurement.resv.resv_word = 0;
+	dev_ioctl->com_paras.measurement.cmd_data = in_buf;
+	dev_ioctl->com_paras.measurement.cmd_data_sz = filesize;
+	dev_ioctl->com_paras.measurement.rsp_data = out_buf;
+	dev_ioctl->com_paras.measurement.rsp_data_sz = ATTESTATION_MEASUREMENT_RSP_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_ATTESTATION_MEASUREMENT);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, ATTESTATION_MEASUREMENT_RSP_MAX_SZ);
+		memset(in_buf, 0, ATTESTATION_MEASUREMENT_CMD_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save output data to the file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, ATTESTATION_MEASUREMENT_RSP_MAX_SZ);
+		memset(in_buf, 0, ATTESTATION_MEASUREMENT_CMD_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.measurement.rsp_data,
+	       dev_ioctl->com_paras.measurement.rsp_data_sz, 1, fp);
+	fclose(fp);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	memset(out_buf, 0, ATTESTATION_SUBKEY_RSP_MAX_SZ);
+	memset(in_buf, 0, ATTESTATION_MEASUREMENT_CMD_MAX_SZ);
+	free(dev_ioctl);
+	free(out_buf);
+	free(in_buf);
+
+	return ret;
+}
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -1157,7 +1499,7 @@ int main(int argc, char *argv[])
 	char *endptr;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvEDR:t:V:C:G:o:d:i:r:c:",
+	while ((c = getopt_long(argc, argv, "phvEDTISMR:t:V:C:G:i:d:o:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1201,6 +1543,26 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_RANDOM_NUMBER_GEN_CMD;
 			filename = optarg;
+			break;
+		case 'T':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD;
+			break;
+		case 'I':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CHIP_ID_CMD;
+			break;
+		case 'S':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_ATTESTATION_SUBKEY_CMD;
+			break;
+		case 'M':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_ATTESTATION_MEASUREMENT_CMD;
 			break;
 		case 'v':
 			verbose = true;
@@ -1279,6 +1641,18 @@ int main(int argc, char *argv[])
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
 		ret = fcs_sdos_decrypt(filename, outfilename, verbose);
+		break;
+	case INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD:
+		ret = fcs_psgsigma_teardown();
+		break;
+	case INTEL_FCS_DEV_CHIP_ID_CMD:
+		ret = fcs_get_chip_id();
+		break;
+	case INTEL_FCS_DEV_ATTESTATION_SUBKEY_CMD:
+		ret = fcs_get_subkey(filename, outfilename, verbose);
+		break;
+	case INTEL_FCS_DEV_ATTESTATION_MEASUREMENT_CMD:
+		ret = fcs_get_measure(filename, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
