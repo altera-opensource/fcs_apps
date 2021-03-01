@@ -71,10 +71,11 @@ static void fcs_prepare_usage(void)
 	printf("--- Crypto Services Configure Tool Usage ---\n");
 	printf("%-32s  %s", "-H|--hps_cert <HPS_image_filename>\n",
 	       "Create the unsigned certificate for an HPS VAB image.\n\n");
-	printf("%-32s  %s %s %s", "-C|--counter_set -s <counter_select> -c <counter_value>\n",
+	printf("%-32s  %s %s %s %s", "-C|--counter_set -s <counter_select> -c <counter_value>\n",
 	       "Create the unsigned certificate for a Counter Set command.\n",
-	       "if counter_set == 1, set Big Counter to counter_value (range 0 to 494)\n",
-	       "if counter_set == 2-5, set Security Version Counter to counter_value (range 0 to 63)\n\n");
+	       "if counter_set=1, set Big Counter to counter_value (range 0 to 494)\n",
+	       "if counter_set=2-5, set Security Version Counter to counter_value (range 0 to 63)\n",
+	       "if counter_value=-1 and counter_set=1-5, then can update the selected counter w/o signed certificate\n\n");
 	printf("%-32s  %s %s", "-K|--key -k|--key_type <user(0)/intel(1)> -i|--key_id <key_id> [-r|--roothash <filename>]\n",
 	       "Create the unsigned certificate for a Key Cancellation command.\n",
 	       "For User Key, roothash selects User Root Hash, Key ID can be 0 to 31.\n\n");
@@ -652,8 +653,6 @@ int main(int argc, char *argv[])
 			printf("%s[%d] HPS filename=%s\n", __func__, __LINE__, hpsfile);
 		fcs_finish_cert(filename, hpsfile, verbose);
 	} else if (type == FCS_IMAGE_COUNTER_SET) {
-		if (counter_val == -1)
-			error_exit("Counter Value parameter not set");
 		if (counter_sel == -1)
 			error_exit("Counter Select parameter not set");
 		if ((!counter_sel) || (counter_sel > 5))
@@ -662,6 +661,8 @@ int main(int argc, char *argv[])
 			error_exit("Invalid Counter Value parameter (Counter value must be from 0 to 63)");
 		if ((counter_sel == 1) && (counter_val > 494))
 			error_exit("Invalid Big Counter parameter (Counter value must be from 0 to 494)");
+		if (counter_val == -1)
+			printf("the certificated is fully authenticated\n");
 
 		if (verbose)
 			printf("%s[%d] Counter Set: counter_sel=%d, counter_val=0x%x\n",
