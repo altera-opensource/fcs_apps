@@ -964,10 +964,10 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	if (verbose)
 		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
 
-	/* Make sure the data is less than 32K - 96 bytes */
+	/* Make sure the data (header + payload) is within the range  */
 	if (filesize > SDOS_ENCRYPTED_MAX_SZ ||
 	    filesize < SDOS_ENCRYPTED_MIN_SZ) {
-		fprintf(stderr, "Invalid filesize %ld. Must be > 16 and <= 32,672\n",
+		fprintf(stderr, "Invalid filesize %ld. Must be >= 120 and <= 32,760\n",
 			filesize);
 		fclose(fp);
 		return -1;
