@@ -838,9 +838,9 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	/* Initialize the header */
 	aes_hdr = (struct fcs_aes_crypt_header *)in_buf;
 	aes_hdr->magic_number = 0xACBDBDED;
-	calc = filesize % 16;
+	calc = filesize % 32;
 	if (calc)
-		pad = 16 - calc;
+		pad = 32 - calc;
 	aes_hdr->data_len = filesize + pad;
 	aes_hdr->pad = pad;
 	aes_hdr->srk_indx = 0;
