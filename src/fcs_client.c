@@ -50,6 +50,9 @@ static const struct option opts[] = {
 	{"validate", required_argument, NULL, 'V'},
 	{"type", required_argument, NULL, 't'},
 	{"counter_set", required_argument, NULL, 'C'},
+	{"counter_set_preauthorized", no_argument, NULL, 'A'},
+	{"counter_type", required_argument, NULL, 'y'},
+	{"counter_value", required_argument, NULL, 'a'},
 	{"get_provision_data", required_argument, NULL, 'G'},
 	{"print", no_argument, NULL, 'p'},
 	{"cache", required_argument, NULL, 'c'},
@@ -84,6 +87,9 @@ static void fcs_client_usage(void)
 	printf("%-32s  %s %s", "-C|--counter_set <signed_file> -c|--cache <0|1>\n",
 	       "\tSet the counter value - requires signed file as parameter and\n",
 	       "\twrite to cache instead of fuses if --cache set to 1\n\n");
+	printf("%-32s  %s %s", "-A|counter_set_preauthorized -y <counter_type> -a <counter_value> -c <0|1>\n",
+	       "\tUpdate the counter value for the selected counter without single certificate\n",
+	       "\tbe activated only when the counter value is set to -1 at authorization certificate\n\n");
 	printf("%-32s  %s", "-G|--get_provision_data <output_filename> -p|--print\n",
 	       "\tGet the provisioning data from SDM\n\n");
 	printf("%-32s  %s %s", "-E|--aes_encrypt -i <input_filename> -o <output_filename> -r <owner_id> -d <ASOI>\n",
@@ -1482,6 +1488,41 @@ static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
 
 	return ret;
 }
+
+/*
+ * fcs_service_counter_set_preauthorized() - set counter value w/o signed certificate
+ * @type: counter type
+ * @value: counter value
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_service_counter_set_preauthorized(uint8_t type, uint32_t value, int test)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = -1;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return ret;
+	}
+
+	dev_ioctl->com_paras.i_request.test.test_word = (test<<31);
+	dev_ioctl->com_paras.i_request.counter_type = type;
+	dev_ioctl->com_paras.i_request.counter_value = value;
+	dev_ioctl->status = -1;
+
+	ret = fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED);
+
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -1505,9 +1546,11 @@ int main(int argc, char *argv[])
 	uint64_t own = 0;
 	int16_t id = 0;
 	char *endptr;
+	uint8_t c_type;
+	uint32_t c_value;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvEDTISMR:t:V:C:G:i:d:o:r:c:s:",
+	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:y:a:i:d:o:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1531,9 +1574,25 @@ int main(int argc, char *argv[])
 			filename = optarg;
 			break;
 		case 'c':
-			if (command != INTEL_FCS_DEV_COUNTER_SET_CMD)
+			if ((command != INTEL_FCS_DEV_COUNTER_SET_CMD) &&
+			    (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD))
 				error_exit("Only one command allowed");
 			test = atoi(optarg);
+			break;
+		case 'A':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD;
+			break;
+		case 'y':
+			if (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD)
+				error_exit("Only one command allowed");
+			c_type = atoi(optarg);
+			break;
+		case 'a':
+			if (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD)
+				error_exit("Only one command allowed");
+			c_value = strtol(optarg, NULL, 0);
 			break;
 		case 'G':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -1639,6 +1698,16 @@ int main(int argc, char *argv[])
 		if ((test != 0) && (test != 1))
 			error_exit("Error with test bit - must be 0 or 1");
 		ret = fcs_service_counter_set(filename, test);
+		break;
+	case INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD:
+		/* check counter value is in valid range */
+		if ((!c_type) || (c_type > 5))
+			error_exit("Invalid Counter type parameter (Must be 1 to 5)");
+		if ((c_type > 1) && (c_value > 64))
+			error_exit("Invalid Counter Value parameter (Counter value must be from 0 to 64)");
+		if ((c_type == 1) && (c_value > 495))
+			error_exit("Invalid Big Counter parameter (Counter value must be from 0 to 495)");
+		ret = fcs_service_counter_set_preauthorized(c_type, c_value, test);
 		break;
 	case INTEL_FCS_DEV_GET_PROVISION_DATA_CMD:
 		if (!filename)
