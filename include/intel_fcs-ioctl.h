@@ -37,7 +37,7 @@ enum fcs_certificate_test {
  * @test_word: firmware request test word be set to zero
  */
 struct intel_fcs_cert_test_word {
-	__u32	test_word;
+	uint32_t test_word;
 };
 
 /**
@@ -52,7 +52,7 @@ struct intel_fcs_cert_test_word {
 struct fcs_validation_request {
 	enum fcs_vab_img_type so_type;
 	void *src;
-	__u32 size;
+	uint32_t size;
 };
 
 /**
@@ -62,7 +62,7 @@ struct fcs_validation_request {
  */
 struct fcs_key_manage_request {
 	void *addr;
-	__u32 size;
+	uint32_t size;
 };
 
 /**
@@ -75,8 +75,8 @@ struct fcs_key_manage_request {
 struct fcs_certificate_request {
 	struct intel_fcs_cert_test_word test;
 	void *addr;
-	__u32 size;
-	__u32 c_status;
+	uint32_t size;
+	uint32_t c_status;
 };
 
 /**
@@ -88,9 +88,9 @@ struct fcs_certificate_request {
  */
 struct fcs_data_encryption {
 	void *src;
-	__u32 src_size;
+	uint32_t src_size;
 	void *dst;
-	__u32 dst_size;
+	uint32_t dst_size;
 };
 
 /**
@@ -102,9 +102,9 @@ struct fcs_data_encryption {
  */
 struct fcs_data_decryption {
 	void *src;
-	__u32 src_size;
+	uint32_t src_size;
 	void *dst;
-	__u32 dst_size;
+	uint32_t dst_size;
 };
 
 /**
@@ -112,7 +112,7 @@ struct fcs_data_decryption {
  * @rndm: 8 words of random data.
  */
 struct fcs_random_number_gen {
-	__u32 rndm[8];
+	uint32_t rndm[8];
 };
 
 /**
@@ -121,8 +121,8 @@ struct fcs_random_number_gen {
  * @flags: Reserved as 0
  */
 struct fcs_version {
-	__u32 version;
-	__u32 flags;
+	uint32_t version;
+	uint32_t flags;
 };
 
 /**
