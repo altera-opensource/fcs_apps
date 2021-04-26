@@ -62,6 +62,7 @@ static const struct option opts[] = {
 	{"random", required_argument, NULL, 'R'},
 	{"verbose", required_argument, NULL, 'v'},
 	{"psgsigma_teardown", no_argument, NULL, 'T'},
+	{"sessionid", required_argument, NULL, 's'},
 	{"get_chipid", no_argument, NULL, 'I'},
 	{"get_subkey", no_argument, NULL, 'S'},
 	{"get_measurement", no_argument, NULL, 'M'},
@@ -92,7 +93,7 @@ static void fcs_client_usage(void)
 	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
 	printf("%-32s  %s", "-R|--random <output_filename>\n",
 	       "\tReturn up to a 32-byte of random data\n\n");
-	printf("%-32s  %s", "-T|--psgsigma_teardown\n",
+	printf("%-32s  %s", "-T|--psgsigma_teardown -s|--sessionid <sessionid>\n",
 	       "Remove all previous black key provision sessions and delete keys assocated with those sessions\n\n");
 	printf("%-32s  %s", "-I|--get_chipid", "get the device chipID\n\n");
 	printf("%-32s  %s", "-S|--get_subkey -i <in_filename> -o <out_filename>\n",
@@ -1149,10 +1150,15 @@ static int fcs_random_number(char *filename, bool verbose)
  *
  * Return: 0 on success, or error on failure
  */
-static int fcs_psgsigma_teardown(void)
+static int fcs_psgsigma_teardown(uint32_t sid)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
 	int ret = 0;
+
+	if ((sid != 1) && (sid != -1)) {
+		printf("session ID must be 1 or -1\n");
+		return -1;
+	}
 
 	dev_ioctl = (struct intel_fcs_dev_ioctl *)
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
@@ -1163,6 +1169,7 @@ static int fcs_psgsigma_teardown(void)
 
 	dev_ioctl->status = -1;
 	dev_ioctl->com_paras.tdown.teardown = true;
+	dev_ioctl->com_paras.tdown.sid = sid;
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_PSGSIGMA_TEARDOWN);
 	printf("ioctl return status=0x%x\n", dev_ioctl->status);
 
@@ -1494,12 +1501,13 @@ int main(int argc, char *argv[])
 	int ret = 0, c, index = 0, prnt = 0;
 	int type = -1;
 	int32_t test = -1;
+	int32_t sessionid = 0;
 	uint64_t own = 0;
 	int16_t id = 0;
 	char *endptr;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvEDTISMR:t:V:C:G:i:d:o:r:c:",
+	while ((c = getopt_long(argc, argv, "phvEDTISMR:t:V:C:G:i:d:o:r:c:s:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1548,6 +1556,11 @@ int main(int argc, char *argv[])
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD;
+			break;
+		case 's':
+			if (command != INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD)
+				error_exit("Only one command allowed");
+			sessionid = atoi(optarg);
 			break;
 		case 'I':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -1643,7 +1656,7 @@ int main(int argc, char *argv[])
 		ret = fcs_sdos_decrypt(filename, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD:
-		ret = fcs_psgsigma_teardown();
+		ret = fcs_psgsigma_teardown(sessionid);
 		break;
 	case INTEL_FCS_DEV_CHIP_ID_CMD:
 		ret = fcs_get_chip_id();

@@ -118,9 +118,11 @@ struct fcs_random_number_gen {
 /**
  * struct fcs_psgsigma_teardown
  * @teardown
+ * @sid: session ID
  */
 struct fcs_psgsigma_teardown {
 	bool teardown;
+	uint32_t sid;
 };
 
 /**
