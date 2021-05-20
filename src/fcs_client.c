@@ -1550,7 +1550,7 @@ int main(int argc, char *argv[])
 	uint32_t c_value;
 	bool verbose = false;
 
-	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:y:a:i:d:o:r:c:",
+	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:y:a:s:i:d:o:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
