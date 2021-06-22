@@ -76,6 +76,7 @@ static const struct option opts[] = {
 	{"close_session", no_argument, NULL, 'l'},
 	{"import_service_key", no_argument, NULL, 'B'},
 	{"export_service_key", no_argument, NULL, 'H'},
+	{"remove_service_key", no_argument, NULL, 'J'},
 	{"key_uid", required_argument, NULL, 'k'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
@@ -126,6 +127,8 @@ static void fcs_client_usage(void)
 	       "\tImport crypto service key to the device\n\n");
 	printf("%-32s  %s", "-H|--export_service_key -s|--sessionid <sessionid> -k|--key_uid <kid> -o <output_filename>\n",
 	        "\tExport crypto service key to output_filename\n\n");
+	printf("%-32s  %s", "-J|--remove_service_key -s|--sessionid <sessionid> -k|--key_uid <kid>\n",
+	       "\tRemove crypto service key from the device\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1917,6 +1920,35 @@ static int fcs_export_service_key(uint32_t sid, uint32_t kid, char *filename)
 	return ret;
 }
 
+static int fcs_remove_service_key(uint32_t sid, uint32_t kid)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl->com_paras.k_object.sid = sid;
+	dev_ioctl->com_paras.k_object.kid = kid;
+	dev_ioctl->com_paras.k_object.obj_data = NULL;
+	dev_ioctl->com_paras.k_object.obj_data_sz = 0;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_REMOVE_KEY);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -1946,7 +1978,7 @@ int main(int argc, char *argv[])
 	int32_t keyid;
 	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:k:w:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:k:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2108,6 +2140,11 @@ int main(int argc, char *argv[])
 		case 'k':
 			keyid = atoi(optarg);
 			break;
+		case 'J':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_REMOVE_KEY_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2193,6 +2230,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_EXPORT_KEY_CMD:
 		ret = fcs_export_service_key(sessionid, keyid, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_REMOVE_KEY_CMD:
+		ret = fcs_remove_service_key(sessionid, keyid);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
