@@ -77,6 +77,7 @@ static const struct option opts[] = {
 	{"import_service_key", no_argument, NULL, 'B'},
 	{"export_service_key", no_argument, NULL, 'H'},
 	{"remove_service_key", no_argument, NULL, 'J'},
+	{"get_service_key_info", no_argument, NULL, 'K'},
 	{"key_uid", required_argument, NULL, 'k'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
@@ -129,6 +130,8 @@ static void fcs_client_usage(void)
 	        "\tExport crypto service key to output_filename\n\n");
 	printf("%-32s  %s", "-J|--remove_service_key -s|--sessionid <sessionid> -k|--key_uid <kid>\n",
 	       "\tRemove crypto service key from the device\n\n");
+	printf("%-32s  %s", "-K|--get_service_key_info -s|--sessionid <sessionid> -k|--key_uid <kid> -o <output_filename>\n",
+	       "\tGet crypto service key info\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1949,6 +1952,72 @@ static int fcs_remove_service_key(uint32_t sid, uint32_t kid)
 	return ret;
 }
 
+static int fcs_get_service_key_info(uint32_t sid, uint32_t kid, char *filename)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *out_buf;
+	FILE *fp;
+	int ret;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	/* allocate a buffer for the output data */
+	out_buf = calloc(CRYPTO_GET_KEY_INFO_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		free(dev_ioctl);
+		return -1;
+	}
+
+	dev_ioctl->com_paras.k_object.sid = sid;
+	dev_ioctl->com_paras.k_object.kid = kid;
+	dev_ioctl->com_paras.k_object.obj_data = out_buf;
+	dev_ioctl->com_paras.k_object.obj_data_sz = CRYPTO_GET_KEY_INFO_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(out_buf, 0, CRYPTO_GET_KEY_INFO_MAX_SZ);
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(out_buf);
+		free(dev_ioctl);
+		return ret;
+	}
+
+	/* save output responses to the file */
+	fp = fopen(filename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			filename, strerror(errno));
+		memset(out_buf, 0, CRYPTO_GET_KEY_INFO_MAX_SZ);
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(out_buf);
+		free(dev_ioctl);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.k_object.obj_data,
+	       dev_ioctl->com_paras.k_object.obj_data_sz, 1, fp);
+
+	fclose(fp);
+	memset(out_buf, 0, CRYPTO_GET_KEY_INFO_MAX_SZ);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(out_buf);
+	free(dev_ioctl);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -1978,7 +2047,7 @@ int main(int argc, char *argv[])
 	int32_t keyid;
 	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:k:w:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:k:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2145,6 +2214,11 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_REMOVE_KEY_CMD;
 			break;
+		case 'K':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2233,6 +2307,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_REMOVE_KEY_CMD:
 		ret = fcs_remove_service_key(sessionid, keyid);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO_CMD:
+		ret = fcs_get_service_key_info(sessionid, keyid, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
