@@ -79,6 +79,11 @@ static const struct option opts[] = {
 	{"remove_service_key", no_argument, NULL, 'J'},
 	{"get_service_key_info", no_argument, NULL, 'K'},
 	{"key_uid", required_argument, NULL, 'k'},
+	{"block_mode", required_argument, NULL, 'b'},
+	{"context_id", required_argument, NULL, 'n'},
+	{"iv_field", required_argument, NULL, 'f'},
+	{"aes_crypt", no_argument, NULL, 'Y'},
+	{"aes_crypt_mode", required_argument, NULL, 'm'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -132,6 +137,8 @@ static void fcs_client_usage(void)
 	       "\tRemove crypto service key from the device\n\n");
 	printf("%-32s  %s", "-K|--get_service_key_info -s|--sessionid <sessionid> -k|--key_uid <kid> -o <output_filename>\n",
 	       "\tGet crypto service key info\n\n");
+	printf("%-32s  %s", "-Y|--aes_crypt -s <sid> -n <cid> -k <kid> -b <b_mode> -m <en/decrypt> -f <iv_file> -i <input_filename> -o <output_filename>\n",
+	       "\tAES encrypt (select m as 0) or decrypt (select m as 1) using crypto service key\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -2018,6 +2025,187 @@ static int fcs_get_service_key_info(uint32_t sid, uint32_t kid, char *filename)
 	return ret;
 }
 
+static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
+			 int bmode, int aes_mode, char *iv_field,
+			 char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf, *iv_field_buf;
+	size_t iv_field_sz, input_sz, sz;
+	int calc, pad = 0;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+
+	/* get iv_field data */
+	if (bmode > 0) {
+		fp = fopen(iv_field, "rbx");
+		if (!fp) {
+			fprintf(stderr, "can't open iv file %s for reading: %s\n",
+				iv_field, strerror(errno));
+			return ret;
+		}
+
+		if (fstat(fileno(fp), &st)) {
+			fclose(fp);
+			fprintf(stderr, "Unable to open iv file %s:  %s\n",
+				iv_field, strerror(errno));
+			return ret;
+		}
+
+		iv_field_sz = st.st_size;
+		if (iv_field_sz > 16) {
+			printf("%s[%d] incorrect iv_fileds_size=%ld\n", __func__, __LINE__, iv_field_sz);
+			return ret;
+		}
+
+		iv_field_buf = calloc(16, sizeof(iv_field_buf));
+		if (!iv_field_buf) {
+			 fprintf(stderr, "can't calloc buffer for iv %s:  %s\n",
+				 iv_field_buf, strerror(errno));
+			 fclose(fp);
+			 return ret;
+		}
+
+		sz = fread(iv_field_buf, 1, iv_field_sz, fp);
+		fclose(fp);
+
+		if (sz != iv_field_sz) {
+			fprintf(stderr, "Size mismatch reading data into iv buffer [%ld/%ld] %s:  %s\n",
+				sz, iv_field_sz, iv_field_buf, strerror(errno));
+			free(iv_field_buf);
+			return ret;
+		}
+	}
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open input %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open input file %s:  %s\n",
+			in_f_name, strerror(errno));
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	input_sz = st.st_size;
+
+	if (input_sz % 32) {
+		fprintf(stderr, "input file %s is not 32 byte aligned: %s\n",
+			in_f_name, strerror(errno));
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	/* padding 32 bytes align */
+	calc = input_sz % 32;
+	if (calc)
+		pad = 32 - calc;
+	input_sz = input_sz + pad;
+
+	in_buf = calloc(input_sz, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for input %s:  %s\n",
+			in_f_name, strerror(errno));
+		fclose(fp);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, input_sz, fp);
+	fclose(fp);
+	if (sz != input_sz) {
+		fprintf(stderr, "Size mismatch reading data into input buffer [%ld/%ld] %s:  %s\n",
+			sz, input_sz, in_f_name, strerror(errno));
+		free(in_buf);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	out_buf = calloc(input_sz, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for output %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.a_crypt.cpara.bmode = bmode;
+	dev_ioctl->com_paras.a_crypt.cpara.aes_mode = aes_mode;
+	if (bmode > 0)
+		strncpy(dev_ioctl->com_paras.a_crypt.cpara.iv_field, iv_field_buf, 16);
+	dev_ioctl->com_paras.a_crypt.sid = sid;
+	dev_ioctl->com_paras.a_crypt.cid = cid;
+	dev_ioctl->com_paras.a_crypt.kuid = kid;
+	dev_ioctl->com_paras.a_crypt.src = in_buf;
+	dev_ioctl->com_paras.a_crypt.src_size = input_sz;
+	dev_ioctl->com_paras.a_crypt.dst = out_buf;
+	dev_ioctl->com_paras.a_crypt.dst_size = input_sz;
+	if (bmode == 0)
+		dev_ioctl->com_paras.a_crypt.cpara_size = 12;
+	else
+		dev_ioctl->com_paras.a_crypt.cpara_size = 28;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_AES_CRYPT);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (!ret) {
+		/* save result into output file */
+		fp = fopen(out_f_name, "wbx");
+		if (!fp) {
+			fprintf(stderr, "can't open %s for writing: %s\n",
+				out_f_name, strerror(errno));
+			ret = -1;
+		} else {
+
+			fwrite(dev_ioctl->com_paras.a_crypt.dst,
+			       dev_ioctl->com_paras.a_crypt.dst_size, 1, fp);
+			fclose(fp);
+		}
+	}
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	memset(out_buf, 0, input_sz);
+	memset(in_buf, 0, input_sz);
+	if (bmode > 0)
+		memset(iv_field_buf, 0, 16);
+	free(dev_ioctl);
+	free(out_buf);
+	free(in_buf);
+	if (bmode > 0)
+		free(iv_field_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -2046,8 +2234,12 @@ int main(int argc, char *argv[])
 	int type = -1;
 	int32_t keyid;
 	char *endptr;
+	int block_mode;
+	int aes_mode;
+	char *iv_field;
+	int context_id;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:k:w:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2219,6 +2411,25 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO_CMD;
 			break;
+		case 'Y':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD;
+			break;
+		case 'b':
+			block_mode = atoi(optarg);
+			break;
+		case 'n':
+			context_id = atoi(optarg);
+			break;
+		case 'f':
+			iv_field = optarg;
+			break;
+		case 'm':
+			aes_mode = atoi(optarg);
+			if ((aes_mode != 0) && (aes_mode !=1))
+				error_exit("Invalid aes_mode, must be 0 or 1\n");
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2311,6 +2522,9 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO_CMD:
 		ret = fcs_get_service_key_info(sessionid, keyid, outfilename);
 		break;
+	case INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD:
+		ret = fcs_aes_crypt(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
+		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
 		fprintf(stderr, "Invalid Input Command [0x%X]\n", command);
@@ -2318,8 +2532,6 @@ int main(int argc, char *argv[])
 		break;
 	}
 
-	/* add hard delay to make sure the opertion is completed */
-	/* or change app to poll the operation status */
 	sleep(1);
 
 	return ret;

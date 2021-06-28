@@ -45,6 +45,9 @@
 
 #define CRYPTO_EXPORTED_KEY_OBJECT_MAX_SZ	364	/* 91 (88+3 header) words */
 #define CRYPTO_GET_KEY_INFO_MAX_SZ		144	/* 36 words w/ header */
+
+#define AES_CRYPT_CMD_MAX_SZ			4194304	/* set MAX size as 4 Mb for now */
+
 /*
  * struct fcs_hps_generic_header
  * @cert_magic_num: Certificate Magic Word (0x25D04E7F)
