@@ -87,6 +87,8 @@ static const struct option opts[] = {
 	{"get_digest", no_argument, NULL, 'N'},
 	{"sha_op_mode", required_argument, NULL, 'g'},
 	{"sha_digest_sz", required_argument, NULL, 'j'},
+	{"mac_verify", no_argument, NULL, 'O'},
+	{"in_filename_list", required_argument, NULL, 'z'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -144,6 +146,8 @@ static void fcs_client_usage(void)
 	       "\tAES encrypt (select m as 0) or decrypt (select m as 1) using crypto service key\n\n");
 	printf("%-32s  %s", "-N|--get_digest -s <sid> -n <cid> -k <kid> -g <sha_op_mode> -j <dig_sz> -i <input_filename> -o <output_filename>\n",
 	       "\tRequest the SHA-2 hash digest on a blob\n\n");
+	printf("%-32s  %s", "-O|--mac_verify -s <sid> -n <cid> -k <kid> -j <dig_sz> -z <data.bin#mac.bin> -o <output_filename>\n",
+	       "\tCheck the integrity and authenticity of a blob using HMAC\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -2282,6 +2286,7 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 	dev_ioctl->com_paras.s_mac_data.src_size = input_sz;
 	dev_ioctl->com_paras.s_mac_data.dst = out_buf;
 	dev_ioctl->com_paras.s_mac_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.s_mac_data.userdata_sz = input_sz;
 
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_GET_DIGEST);
 
@@ -2326,6 +2331,171 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
+                int dig_sz, char *in_f_name_list, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	FILE *fp0, *fp1, *fp;
+	struct stat st0, st1;
+	size_t input_sz0, sz0;
+	size_t input_sz1, sz1;
+	size_t input_sz;
+	size_t out_sz = 32;
+	int ret = -1;
+	char *ptr[2];
+	int i = 0;
+
+	if (!in_f_name_list || !out_f_name) {
+		fprintf(stderr, "Missing input files (-z) or output file (-o) option\n");
+		return ret;
+	}
+
+	/* parse to data and mac binary file */
+	ptr[i] = strtok(in_f_name_list, "#");
+	while ((ptr[i]!= NULL) && (i <= 1)) {
+		i++;
+		ptr[i] = strtok(NULL, "#");
+	}
+	if (i != 2) {
+		fprintf(stderr, "Missing data or mac file in -z option\n");
+		return ret;
+	}
+
+	/* get data input file data */
+	fp0 = fopen(ptr[0], "rbx");
+	if (!fp0) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp0), &st0)) {
+		fclose(fp0);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	input_sz0 = st0.st_size;
+
+	/* get mac input file data */
+	fp1 = fopen(ptr[1], "rbx");
+	if (!fp1) {
+		fclose(fp0);
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp1), &st1)) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	input_sz1 = st1.st_size;
+
+	input_sz = input_sz0 + input_sz1;
+
+	in_buf = calloc(input_sz, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			in_f_name_list, strerror(errno));
+		fclose(fp0);
+		fclose(fp1);
+		return ret;
+	}
+
+	sz0 = fread(in_buf, 1, input_sz0, fp0);
+	fclose(fp0);
+	if (sz0 != input_sz0) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz0, input_sz0, ptr[0], strerror(errno));
+		fclose(fp1);
+		free(in_buf);
+		return ret;
+	}
+
+	sz1 = fread(in_buf + sz0, 1, input_sz1, fp1);
+	fclose(fp1);
+	if (sz1 != input_sz1) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz1, input_sz1, ptr[1], strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	out_buf = calloc(out_sz, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.s_mac_data.sha_op_mode = 0;
+	dev_ioctl->com_paras.s_mac_data.sha_digest_sz = dig_sz;
+	dev_ioctl->com_paras.s_mac_data.sid = sid;
+	dev_ioctl->com_paras.s_mac_data.cid = cid;
+	dev_ioctl->com_paras.s_mac_data.kuid = kid;
+	dev_ioctl->com_paras.s_mac_data.src = in_buf;
+	dev_ioctl->com_paras.s_mac_data.src_size = input_sz;
+	dev_ioctl->com_paras.s_mac_data.dst = out_buf;
+	dev_ioctl->com_paras.s_mac_data.dst_size = out_sz;
+	dev_ioctl->com_paras.s_mac_data.userdata_sz = input_sz0;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_MAC_VERIFY);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, out_sz);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, out_sz);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.s_mac_data.dst,
+	       dev_ioctl->com_paras.s_mac_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, out_sz);
+	free(out_buf);
+	memset(in_buf, 0, input_sz);
+	free(in_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -2342,6 +2512,7 @@ int main(int argc, char *argv[])
 {
 	enum intel_fcs_command_code command = INTEL_FCS_DEV_COMMAND_NONE;
 	char *filename = NULL, *outfilename = NULL;
+	char *filename_list = NULL;
 	int ret = 0, c, index = 0, prnt = 0;
 	int32_t sessionid = 0;
 	bool verbose = false;
@@ -2361,7 +2532,7 @@ int main(int argc, char *argv[])
 	int sha_op_mode;
 	int sha_dig_sz;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:g:j:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2563,6 +2734,14 @@ int main(int argc, char *argv[])
 		case 'j':
 			sha_dig_sz = atoi(optarg);
 			break;
+		case 'O':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_CMD;
+			break;
+		case 'z':
+			filename_list = optarg;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2660,6 +2839,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD:
 		ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_CMD:
+		ret = fcs_mac_verify(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
