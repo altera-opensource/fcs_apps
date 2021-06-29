@@ -84,6 +84,9 @@ static const struct option opts[] = {
 	{"iv_field", required_argument, NULL, 'f'},
 	{"aes_crypt", no_argument, NULL, 'Y'},
 	{"aes_crypt_mode", required_argument, NULL, 'm'},
+	{"get_digest", no_argument, NULL, 'N'},
+	{"sha_op_mode", required_argument, NULL, 'g'},
+	{"sha_digest_sz", required_argument, NULL, 'j'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -139,6 +142,8 @@ static void fcs_client_usage(void)
 	       "\tGet crypto service key info\n\n");
 	printf("%-32s  %s", "-Y|--aes_crypt -s <sid> -n <cid> -k <kid> -b <b_mode> -m <en/decrypt> -f <iv_file> -i <input_filename> -o <output_filename>\n",
 	       "\tAES encrypt (select m as 0) or decrypt (select m as 1) using crypto service key\n\n");
+	printf("%-32s  %s", "-N|--get_digest -s <sid> -n <cid> -k <kid> -g <sha_op_mode> -j <dig_sz> -i <input_filename> -o <output_filename>\n",
+	       "\tRequest the SHA-2 hash digest on a blob\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -2206,6 +2211,121 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
+		int op_mode, int dig_sz, char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	size_t input_sz, sz;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	input_sz = st.st_size;
+
+	in_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			in_f_name, strerror(errno));
+		fclose(fp);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, input_sz, fp);
+	fclose(fp);
+	if (sz != input_sz) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, input_sz, in_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.s_mac_data.sha_op_mode = op_mode;
+	dev_ioctl->com_paras.s_mac_data.sha_digest_sz = dig_sz;
+	dev_ioctl->com_paras.s_mac_data.sid = sid;
+	dev_ioctl->com_paras.s_mac_data.cid = cid;
+	dev_ioctl->com_paras.s_mac_data.kuid = kid;
+	dev_ioctl->com_paras.s_mac_data.src = in_buf;
+	dev_ioctl->com_paras.s_mac_data.src_size = input_sz;
+	dev_ioctl->com_paras.s_mac_data.dst = out_buf;
+	dev_ioctl->com_paras.s_mac_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_GET_DIGEST);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		memset(in_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+                memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+                memset(in_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+                free(dev_ioctl);
+                free(out_buf);
+                free(in_buf);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.s_mac_data.dst,
+	       dev_ioctl->com_paras.s_mac_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+	memset(in_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(in_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -2232,14 +2352,16 @@ int main(int argc, char *argv[])
 	int16_t id = 0;
 	uint8_t c_type;
 	int type = -1;
-	int32_t keyid;
+	int32_t keyid = 0;
 	char *endptr;
 	int block_mode;
 	int aes_mode;
 	char *iv_field;
 	int context_id;
+	int sha_op_mode;
+	int sha_dig_sz;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:g:j:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2430,6 +2552,17 @@ int main(int argc, char *argv[])
 			if ((aes_mode != 0) && (aes_mode !=1))
 				error_exit("Invalid aes_mode, must be 0 or 1\n");
 			break;
+		case 'N':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD;
+			break;
+		case 'g':
+			sha_op_mode = atoi(optarg);
+			break;
+		case 'j':
+			sha_dig_sz = atoi(optarg);
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2524,6 +2657,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD:
 		ret = fcs_aes_crypt(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD:
+		ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
