@@ -69,6 +69,8 @@ static const struct option opts[] = {
 	{"get_chipid", no_argument, NULL, 'I'},
 	{"get_subkey", no_argument, NULL, 'S'},
 	{"get_measurement", no_argument, NULL, 'M'},
+	{"get_certificate", required_argument, NULL, 'F'},
+	{"certificate_reload", required_argument, NULL, 'L'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -106,6 +108,10 @@ static void fcs_client_usage(void)
 	       "\tGet the FPGA attestation subkey\n\n");
 	printf("%-32s  %s", "-M|--get_measurement -i <in_filename> -o <out_filename>\n",
 	       "\tGet the FPGA attestation measurement\n\n");
+	printf("%-32s  %s", "-F|--get_certificate <cer_request> -o <output_filename>\n",
+	       "\tGet the FPGA attestation certificate\n\n");
+	printf("%-32s  %s", "-L|--certificate_reload <cer_request>\n",
+	       "\tFPGA attestation certificate on reload\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1490,6 +1496,108 @@ static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
 }
 
 /*
+ * fcs_attestation_get_certificate() - get FPGA attestation certificate
+ * @c_request: certificate request
+ * @outfilename: file name which holds certificate reponses
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+int fcs_attestation_get_certificate(int c_request, char *outfilename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *out_buf;
+	FILE *fp;
+	int ret = -1;
+
+	/* allocate a buffer for the output data */
+	out_buf = calloc(ATTESTATION_CERTIFICATE_RSP_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			outfilename, strerror(errno));
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		return ret;
+	}
+
+	dev_ioctl->com_paras.certificate.c_request = c_request;
+	dev_ioctl->com_paras.certificate.rsp_data = out_buf;
+	dev_ioctl->com_paras.certificate.rsp_data_sz = ATTESTATION_CERTIFICATE_RSP_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_ATTESTATION_GET_CERTIFICATE);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, ATTESTATION_CERTIFICATE_RSP_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		return ret;
+	}
+
+	/* save output responses to the file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, ATTESTATION_CERTIFICATE_RSP_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.certificate.rsp_data,
+	       dev_ioctl->com_paras.certificate.rsp_data_sz, 1, fp);
+	fclose(fp);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	memset(out_buf, 0, ATTESTATION_CERTIFICATE_RSP_MAX_SZ);
+	free(dev_ioctl);
+	free(out_buf);
+
+	return ret;
+}
+
+/*
+ * fcs_attestation_certificate_reload() - FPGA attestation certificate reload
+ * @c_request: certificate request
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+int fcs_attestation_certificate_reload(int c_request, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = -1;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return ret;
+	}
+
+	dev_ioctl->com_paras.c_reload.c_request = c_request;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	return ret;
+}
+
+/*
  * fcs_service_counter_set_preauthorized() - set counter value w/o signed certificate
  * @type: counter type
  * @value: counter value
@@ -1540,17 +1648,18 @@ int main(int argc, char *argv[])
 	enum intel_fcs_command_code command = INTEL_FCS_DEV_COMMAND_NONE;
 	char *filename = NULL, *outfilename = NULL;
 	int ret = 0, c, index = 0, prnt = 0;
-	int type = -1;
-	int32_t test = -1;
 	int32_t sessionid = 0;
+	bool verbose = false;
+	int cer_request = 0;
+	int32_t test = -1;
+	uint32_t c_value;
 	uint64_t own = 0;
 	int16_t id = 0;
-	char *endptr;
 	uint8_t c_type;
-	uint32_t c_value;
-	bool verbose = false;
+	int type = -1;
+	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:y:a:s:i:d:o:r:c:",
+	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1635,6 +1744,18 @@ int main(int argc, char *argv[])
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_ATTESTATION_MEASUREMENT_CMD;
+			break;
+		case 'F':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			cer_request = atoi(optarg);
+			command = INTEL_FCS_DEV_ATTESTATION_GET_CERTIFICATE_CMD;
+			break;
+		case 'L':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			cer_request = atoi(optarg);
+			command = INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD;
 			break;
 		case 'v':
 			verbose = true;
@@ -1735,6 +1856,12 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_MEASUREMENT_CMD:
 		ret = fcs_get_measure(filename, outfilename, verbose);
+		break;
+	case INTEL_FCS_DEV_ATTESTATION_GET_CERTIFICATE_CMD:
+		ret = fcs_attestation_get_certificate(cer_request, outfilename, verbose);
+		break;
+	case INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD:
+		ret = fcs_attestation_certificate_reload(cer_request, verbose);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
