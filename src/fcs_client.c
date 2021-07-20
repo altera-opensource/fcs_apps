@@ -71,6 +71,7 @@ static const struct option opts[] = {
 	{"get_measurement", no_argument, NULL, 'M'},
 	{"get_certificate", required_argument, NULL, 'F'},
 	{"certificate_reload", required_argument, NULL, 'L'},
+	{"get_rom_patch_sha384", required_argument, NULL, 'w'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -1632,6 +1633,64 @@ static int fcs_service_counter_set_preauthorized(uint8_t type, uint32_t value, i
 }
 
 /*
+ * fcs_service_get_rom_patch_sha384() - get the rom patch area sha384 checksum
+ * @filename: Filename to save result into.
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_service_get_rom_patch_sha384(char *filename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int status;
+	FILE *fp;
+	int i;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	/* Fill in the structure */
+	for (i = 0; i < 12; i++)
+		dev_ioctl->com_paras.sha384.checksum[i] = 0;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_GET_ROM_PATCH_SHA384);
+
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (verbose)
+		/* print random result data */
+		for (i = 0; i < 12; i++)
+			printf("Rom SHA384 output[%d]=%x\n", i,
+				dev_ioctl->com_paras.sha384.checksum[i]);
+
+	/* Save result in binary file */
+	fp = fopen(filename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			filename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.sha384.checksum,
+	       sizeof(dev_ioctl->com_paras.sha384.checksum), 1, fp);
+
+	fclose(fp);
+
+	status = dev_ioctl->status;
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return status;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -1659,7 +1718,7 @@ int main(int argc, char *argv[])
 	int type = -1;
 	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:",
+	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1794,6 +1853,12 @@ int main(int argc, char *argv[])
 			if (*endptr)
 				error_exit("Owner ID conversion error");
 			break;
+		case 'w':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_GET_ROM_PATCH_SHA384_CMD;
+			filename = optarg;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -1862,6 +1927,11 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD:
 		ret = fcs_attestation_certificate_reload(cer_request, verbose);
+		break;
+	case INTEL_FCS_DEV_GET_ROM_PATCH_SHA384_CMD:
+		if (!filename)
+			error_exit("Missing filename to save data into");
+		ret = fcs_service_get_rom_patch_sha384(filename, verbose);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
