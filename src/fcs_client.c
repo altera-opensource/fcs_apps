@@ -95,6 +95,7 @@ static const struct option opts[] = {
 	{"ecdsa_hash_verify", no_argument, NULL, 'U'},
 	{"ecdsa_sha2_data_verify", no_argument, NULL, 'W'},
 	{"ecdsa_get_pub_key", no_argument, NULL, 'Z'},
+	{"ecdh_request", no_argument, NULL, 'X'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -164,6 +165,8 @@ static void fcs_client_usage(void)
 	       "\tSend ECDSA digital signature verify request on a data blob\n\n");
 	printf("%-32s  %s", "-Z|--ecdsa_get_pub_key -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -o <output_filename>\n",
 	       "\tSend the request to get the public key and save public key data into the output_filename\n\n");
+	printf("%-32s  %s", "-X|--ecdh_request -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -i <input_filename> -o <output_filename>\n",
+	       "\tSend the request on generating a share secret on Diffie-Hellman key exchange\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -3209,6 +3212,123 @@ static int fcs_ecdsa_get_public_key(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+/**
+ *
+ */
+static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	size_t input_sz, sz;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	input_sz = st.st_size;
+
+	in_buf = calloc(input_sz, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			in_f_name, strerror(errno));
+		fclose(fp);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, input_sz, fp);
+	fclose(fp);
+	if (sz != input_sz) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, input_sz, in_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.ecdsa_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_data.src = in_buf;
+	dev_ioctl->com_paras.ecdsa_data.src_size = input_sz;
+	dev_ioctl->com_paras.ecdsa_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.ecdsa_data.ecc_algorithm = ecc_algo;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDH_REQUEST);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+	memset(in_buf, 0, input_sz);
+	free(in_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -3246,7 +3366,7 @@ int main(int argc, char *argv[])
 	int sha_dig_sz;
 	int ecc_algo;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWXYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -3484,6 +3604,11 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD;
 			break;
+		case 'X':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_ECDH_REQUEST_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -3599,6 +3724,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD:
 		ret = fcs_ecdsa_get_public_key(sessionid, context_id, keyid, ecc_algo, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_ECDH_REQUEST_CMD:
+		ret = fcs_ecdh_request(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
