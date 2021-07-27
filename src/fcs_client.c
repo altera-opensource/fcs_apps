@@ -89,6 +89,8 @@ static const struct option opts[] = {
 	{"sha_digest_sz", required_argument, NULL, 'j'},
 	{"mac_verify", no_argument, NULL, 'O'},
 	{"in_filename_list", required_argument, NULL, 'z'},
+	{"ecdsa_hash_sign", no_argument, NULL, 'P'},
+	{"ecc_algorithm", required_argument, NULL, 'q'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -148,6 +150,8 @@ static void fcs_client_usage(void)
 	       "\tRequest the SHA-2 hash digest on a blob\n\n");
 	printf("%-32s  %s", "-O|--mac_verify -s <sid> -n <cid> -k <kid> -j <dig_sz> -z <data.bin#mac.bin> -o <output_filename>\n",
 	       "\tCheck the integrity and authenticity of a blob using HMAC\n\n");
+	printf("%-32s  %s", "-P|--ecdsa_hash_sign -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -i <input_filename> -o <output_filename>\n",
+	       "\tSend ECDSA digital signature signing request on a data blob\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -2496,6 +2500,123 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+/**
+ *
+ */
+static int fcs_ecdsa_hash_sign(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf, *out_buf;
+	size_t input_sz, sz;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	input_sz = st.st_size;
+
+	in_buf = calloc(input_sz + 1, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			in_f_name, strerror(errno));
+		fclose(fp);
+		return ret;
+	}
+
+	sz = fread(in_buf, 1, input_sz, fp);
+	fclose(fp);
+	if (sz != input_sz) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, input_sz, in_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.ecdsa_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_data.src = in_buf;
+	dev_ioctl->com_paras.ecdsa_data.src_size = input_sz;
+	dev_ioctl->com_paras.ecdsa_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.ecdsa_data.ecc_algorithm = ecc_algo;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		memset(in_buf, 0, input_sz + 1);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		memset(in_buf, 0, input_sz + 1);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+	memset(in_buf, 0, input_sz + 1);
+	free(in_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -2531,8 +2652,9 @@ int main(int argc, char *argv[])
 	int context_id;
 	int sha_op_mode;
 	int sha_dig_sz;
+	int ecc_algo;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:r:c:k:w:g:j:z:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2742,6 +2864,14 @@ int main(int argc, char *argv[])
 		case 'z':
 			filename_list = optarg;
 			break;
+		case 'P':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD;
+			break;
+		case 'q':
+			ecc_algo = atoi(optarg);
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2842,6 +2972,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_CMD:
 		ret = fcs_mac_verify(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD:
+		ret = fcs_ecdsa_hash_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
