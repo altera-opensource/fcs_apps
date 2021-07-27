@@ -322,6 +322,30 @@ struct fcs_ecdsa_data {
 };
 
 /**
+ * struct fcs_ecdsa_sha2_data
+ * @sid: session ID
+ * @cid: context ID
+ * @kuid: key UID
+ * @src: pointer of source
+ * @src_size: size of source
+ * @dst: pointer of destination
+ * @dst_size: size of destination
+ * @ecc_algorithm: ECC algorithm
+ * @userdata_sz: size of user data
+ */
+struct fcs_ecdsa_sha2_data {
+	uint32_t sid;
+	uint32_t cid;
+	uint32_t kuid;
+	void *src;
+	uint32_t src_size;
+	void *dst;
+	uint32_t dst_size;
+	int ecc_algorithm;
+	uint32_t userdata_sz;
+};
+
+/**
  * struct intel_fcs_dev_ioct: common structure passed to Linux
  *	kernel driver for all commands.
  * @status: Used for the return code.
@@ -363,6 +387,7 @@ struct intel_fcs_dev_ioctl {
 		struct fcs_aes_crypt		a_crypt;
 		struct fcs_sha2_mac_data	s_mac_data;
 		struct fcs_ecdsa_data		ecdsa_data;
+		struct fcs_ecdsa_sha2_data	ecdsa_sha2_data;
 	} com_paras;
 };
 
@@ -433,6 +458,7 @@ enum intel_fcs_command_code {
 	INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD,
 	INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_CMD,
 	INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD,
+	INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD,
 };
 
 #define INTEL_FCS_DEV_VERSION_REQUEST \
@@ -542,6 +568,10 @@ enum intel_fcs_command_code {
 #define INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY \
 	_IOWR(INTEL_FCS_IOCTL, \
 	      INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD, struct intel_fcs_dev_ioctl)
+
+#define INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY \
+	_IOWR(INTEL_FCS_IOCTL, \
+	      INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD, struct intel_fcs_dev_ioctl)
 
 #endif
 
