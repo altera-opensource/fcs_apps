@@ -94,6 +94,7 @@ static const struct option opts[] = {
 	{"ecdsa_sha2_data_sign", no_argument, NULL, 'Q'},
 	{"ecdsa_hash_verify", no_argument, NULL, 'U'},
 	{"ecdsa_sha2_data_verify", no_argument, NULL, 'W'},
+	{"ecdsa_get_pub_key", no_argument, NULL, 'Z'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -161,6 +162,8 @@ static void fcs_client_usage(void)
 	       "\tSend ECDSA digital signature verify request with precalculated hash\n\n");
 	printf("%-32s  %s", "-W|--ecdsa_sha2_data_verify -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -z <data.bin#sigture.bin#pubkey.bin> -o <output_filename>\n",
 	       "\tSend ECDSA digital signature verify request on a data blob\n\n");
+	printf("%-32s  %s", "-Z|--ecdsa_get_pub_key -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -o <output_filename>\n",
+	       "\tSend the request to get the public key and save public key data into the output_filename\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -3133,6 +3136,79 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+/**
+ *
+ */
+static int fcs_ecdsa_get_public_key(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *out_buf;
+	int ret = -1;
+	FILE *fp;
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.ecdsa_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_data.src = NULL;
+	dev_ioctl->com_paras.ecdsa_data.src_size = 0;
+	dev_ioctl->com_paras.ecdsa_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.ecdsa_data.ecc_algorithm = ecc_algo;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+		free(dev_ioctl);
+		free(out_buf);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -3170,7 +3246,7 @@ int main(int argc, char *argv[])
 	int sha_dig_sz;
 	int ecc_algo;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -3403,6 +3479,11 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD;
 			break;
+		case 'Z':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -3515,6 +3596,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD:
 		ret = fcs_ecdsa_sha2_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD:
+		ret = fcs_ecdsa_get_public_key(sessionid, context_id, keyid, ecc_algo, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
