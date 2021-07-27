@@ -92,6 +92,7 @@ static const struct option opts[] = {
 	{"ecdsa_hash_sign", no_argument, NULL, 'P'},
 	{"ecc_algorithm", required_argument, NULL, 'q'},
 	{"ecdsa_sha2_data_sign", no_argument, NULL, 'Q'},
+	{"ecdsa_hash_verify", no_argument, NULL, 'U'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -155,6 +156,8 @@ static void fcs_client_usage(void)
 	       "\tSend ECDSA digital signature signing request on a data blob\n\n");
 	printf("%-32s  %s", "-Q|--ecdsa_sha2_data_sign -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -i <input_filename> -o <output_filename>\n",
 	       "\tSend ECDSA signature signing request on a data blob\n\n");
+	printf("%-32s  %s", "-U|--ecdsa_hash_verify -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -z <hash.bin#sigture.bin#pubkey.bin> -o <output_filename>\n",
+	       "\tSend ECDSA digital signature verify request with precalculated hash\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -2737,6 +2740,204 @@ static int fcs_ecdsa_sha2_data_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 	return ret;
 }
 
+/**
+ *
+ */
+static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *ds_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	FILE *fp0, *fp1, *fp2, *fp;
+	struct stat st0, st1, st2;
+	char *in_buf, *out_buf;
+	size_t sz0, sz1, sz2;
+	size_t input_sz0;
+	size_t input_sz1;
+	size_t input_sz2;
+	size_t input_sz;
+	int ret = -1;
+	char *ptr[3];
+	int i = 0;
+
+	/* parse to get hash, signature and public key data */
+	ptr[i] = strtok(ds_f_name, "#");
+	while ((ptr[i]!= NULL) || (i >> 2)) {
+		/*
+		  printf( " %s i=%d\n", ptr[i], i);
+		 */
+		i++;
+		ptr[i] = strtok(NULL, "#");
+	}
+
+	fp0 = fopen(ptr[0], "rbx");
+	if (!fp0) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp0), &st0)) {
+		fclose(fp0);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	input_sz0 = st0.st_size;
+
+	fp1 = fopen(ptr[1], "rbx");
+	if (!fp1) {
+		fclose(fp0);
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp1), &st1)) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	input_sz1 = st1.st_size;
+
+	if (kid == 0) {
+		fp2 = fopen(ptr[2], "rbx");
+		if (!fp2) {
+			fprintf(stderr, "can't open %s for reading: %s\n",
+				ptr[2], strerror(errno));
+			fclose(fp0);
+			fclose(fp1);
+			return ret;
+		}
+		if (fstat(fileno(fp2), &st2)) {
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				ptr[2], strerror(errno));
+			fclose(fp0);
+			fclose(fp1);
+			fclose(fp2);
+			return ret;
+		}
+		input_sz2 = st2.st_size;
+	}
+
+	if (kid == 0)
+		input_sz = input_sz0 + input_sz1 + input_sz2;
+	else
+		input_sz = input_sz0 + input_sz1;
+
+	in_buf = calloc(input_sz, sizeof(in_buf));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			ds_f_name, strerror(errno));
+		fclose(fp0);
+		fclose(fp1);
+		if (kid == 0)
+			fclose(fp2);
+		return ret;
+	}
+
+	sz0 = fread(in_buf, 1, input_sz0, fp0);
+	fclose(fp0);
+	if (sz0 != input_sz0) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz0, input_sz0, ptr[0], strerror(errno));
+		fclose(fp1);
+		if (kid == 0)
+			fclose(fp2);
+		free(in_buf);
+		return ret;
+	}
+
+	sz1 = fread(in_buf + sz0, 1, input_sz1, fp1);
+	fclose(fp1);
+	if (sz1 != input_sz1) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz1, input_sz1, ptr[1], strerror(errno));
+		if (kid == 0)
+			fclose(fp2);
+		free(in_buf);
+		return ret;
+	}
+
+	if (kid == 0) {
+		sz2 = fread(in_buf + sz0 + sz1, 1, input_sz2, fp2);
+		fclose(fp2);
+		if (sz2 != input_sz2) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz2, input_sz2, ptr[2], strerror(errno));
+			free(in_buf);
+			return ret;
+		}
+	}
+
+	out_buf = calloc(32, sizeof(out_buf));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl->com_paras.ecdsa_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_data.src = in_buf;
+	dev_ioctl->com_paras.ecdsa_data.src_size = input_sz;
+	dev_ioctl->com_paras.ecdsa_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst_size = 32;
+	dev_ioctl->com_paras.ecdsa_data.ecc_algorithm = ecc_algo;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	if (ret) {
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, 32);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, 32);
+		memset(in_buf, 0, input_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, 32);
+	free(out_buf);
+	memset(in_buf, 0, input_sz);
+	free(in_buf);
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -2774,7 +2975,7 @@ int main(int argc, char *argv[])
 	int sha_dig_sz;
 	int ecc_algo;
 
-	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUYR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -2997,6 +3198,11 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_CMD;
 			break;
+		case 'U':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -3103,6 +3309,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_CMD:
 		ret = fcs_ecdsa_sha2_data_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD:
+		ret = fcs_ecdsa_hash_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
