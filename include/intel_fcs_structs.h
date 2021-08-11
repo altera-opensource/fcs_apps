@@ -8,9 +8,11 @@
 
 #include <stdint.h>
 
-#define FCS_IMAGE_HPS_VAB	0
-#define FCS_IMAGE_COUNTER_SET	1
-#define FCS_IMAGE_KEY_CANCEL	2
+/* Command operation */
+#define FCS_CMD_TYPE_IMAGE_HPS_VAB	0
+#define FCS_CMD_TYPE_IMAGE_COUNTER_SET	1
+#define FCS_CMD_TYPE_IMAGE_KEY_CANCEL	2
+#define FCS_CMD_TYPE_VAB_FINISH		3
 
 #define SDM_CERT_MAGIC_NUM	0x25D04E7F
 

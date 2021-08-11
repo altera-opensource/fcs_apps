@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2020, Intel Corporation
+ * Copyright (C) 2020-2021, Intel Corporation
  */
 
 #include <byteswap.h>
@@ -31,9 +31,6 @@
 #define OUTPUT_CERT_NAME	"unsigned_cert.ccert"
 #define SIGNED_CERT_NAME	"signed_finished_cert.ccert"
 #define VAB_OUTPUT_FILENAME	"hps_image_signed.vab"
-
-#define FCS_VAB_FINISH		14
-
 
 /*
  * option_ops - translate the long options to short options
@@ -68,23 +65,30 @@ static const struct option opts[] = {
 static void fcs_prepare_usage(void)
 {
 	printf("\n--------------------------------------------\n");
-	printf("--- Crypto Services Configure Tool Usage ---\n");
+	printf("--- Crypto Services Configure Tool Usage ---");
+	printf("\n--------------------------------------------\n");
+
 	printf("%-32s  %s", "-H|--hps_cert <HPS_image_filename>\n",
-	       "Create the unsigned certificate for an HPS VAB image.\n\n");
-	printf("%-32s  %s %s %s %s", "-C|--counter_set -s <counter_select> -c <counter_value>\n",
+	       "Create the unsigned certificate for an HPS VAB image.\n");
+	printf("  Output result is saved in filename = %s\n\n", OUTPUT_CERT_NAME);
+
+	printf("%-32s  %s  %s  %s  %s", "-C|--counter_set -s <counter_select> -c <counter_value>\n",
 	       "Create the unsigned certificate for a Counter Set command.\n",
 	       "if counter_set=1, set Big Counter to counter_value (range 0 to 495)\n",
 	       "if counter_set=2-5, set Security Version Counter to counter_value (range 0 to 64)\n",
-	       "if counter_value=-1 and counter_set=1-5, then can update the selected counter w/o signed certificate\n\n");
-	printf("%-32s  %s %s", "-K|--key -k|--key_type <user(0)/intel(1)> -i|--key_id <key_id> [-r|--roothash <filename>]\n",
+	       "if counter_value=-1 and counter_set=1-5, then can update the selected counter w/o signed certificate\n");
+	printf("  Output result is saved in filename = %s\n\n", OUTPUT_CERT_NAME);
+
+	printf("%-32s  %s  %s", "-K|--key -k|--key_type <user(0)/intel(1)> -i|--key_id <key_id> [-r|--roothash <filename>]\n",
 	       "Create the unsigned certificate for a Key Cancellation command.\n",
-	       "For User Key, roothash selects User Root Hash, Key ID can be 0 to 31.\n\n");
-	printf("%-32s  %s %s", "-F|--finish <signed_certificate> [-f|--imagefile <HPS_image_filename>]\n",
+	       "For User Key, roothash selects User Root Hash, Key ID can be 0 to 31.\n");
+	printf("  Output result is saved in filename = %s\n\n", OUTPUT_CERT_NAME);
+
+	printf("%-32s  %s  %s", "-F|--finish <signed_certificate> [-f|--imagefile <HPS_image_filename>]\n",
 	       "Concatentate the size to the certificate. If supplied, concatenate signed certficate to HPS VAB image.\n",
 	       "Output result is saved in filename = hps_image_signed.vab\n\n");
 	printf("%-32s  %s", "-v|--verbose", "Show additional messages\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
-	printf("\n--- output file is %s ---\n", OUTPUT_CERT_NAME);
 	printf("--------------------------------------------\n");
 	printf("\n");
 }
@@ -577,14 +581,14 @@ int main(int argc, char *argv[])
 		switch (c) {
 		case 'H':
 			filename = optarg;
-			type = FCS_IMAGE_HPS_VAB;
+			type = FCS_CMD_TYPE_IMAGE_HPS_VAB;
 			printf("%s[%d] filename=%s\n", __func__, __LINE__, filename);
 			break;
 		case 'C':
-			type = FCS_IMAGE_COUNTER_SET;
+			type = FCS_CMD_TYPE_IMAGE_COUNTER_SET;
 			break;
 		case 'c':
-			if (type != FCS_IMAGE_COUNTER_SET)
+			if (type != FCS_CMD_TYPE_IMAGE_COUNTER_SET)
 				error_exit("Wrong command. Only Counter Set Allowed");
 			if (counter_val != -1)
 				error_exit("Only one counter value allowed");
@@ -592,12 +596,12 @@ int main(int argc, char *argv[])
 			counter_val = strtol(optarg, NULL, 0);
 			break;
 		case 's':
-			if (type != FCS_IMAGE_COUNTER_SET)
+			if (type != FCS_CMD_TYPE_IMAGE_COUNTER_SET)
 				error_exit("Wrong command. Only Counter Set Allowed");
 			counter_sel = atoi(optarg);
 			break;
 		case 'K':
-			type = FCS_IMAGE_KEY_CANCEL;
+			type = FCS_CMD_TYPE_IMAGE_KEY_CANCEL;
 			break;
 		case 'k':
 			if (key_type != -1)
@@ -625,7 +629,7 @@ int main(int argc, char *argv[])
 			break;
 		case 'F':
 			filename = optarg;
-			type = FCS_VAB_FINISH;
+			type = FCS_CMD_TYPE_VAB_FINISH;
 			break;
 		case 'f':
 			hpsfile = optarg;
@@ -642,17 +646,17 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if ((type == FCS_IMAGE_HPS_VAB) && filename) {
+	if ((type == FCS_CMD_TYPE_IMAGE_HPS_VAB) && filename) {
 		if (verbose)
 			printf("%s[%d] filename=%s\n", __func__, __LINE__, filename);
 		fcs_prepare_image(filename, type, verbose);
-	} else if ((type == FCS_VAB_FINISH) && filename) {
+	} else if ((type == FCS_CMD_TYPE_VAB_FINISH) && filename) {
 		if (verbose)
 			printf("%s[%d] Certificate filename=%s\n", __func__, __LINE__, filename);
 		if (verbose && hpsfile)
 			printf("%s[%d] HPS filename=%s\n", __func__, __LINE__, hpsfile);
 		fcs_finish_cert(filename, hpsfile, verbose);
-	} else if (type == FCS_IMAGE_COUNTER_SET) {
+	} else if (type == FCS_CMD_TYPE_IMAGE_COUNTER_SET) {
 		if (counter_sel == -1)
 			error_exit("Counter Select parameter not set");
 		if ((!counter_sel) || (counter_sel > 5))
@@ -669,7 +673,7 @@ int main(int argc, char *argv[])
 			printf("%s[%d] Counter Set: counter_sel=%d, counter_val=0x%x\n",
 				__func__, __LINE__, counter_sel, counter_val);
 		fcs_prepare_counter(counter_sel, counter_val, verbose);
-	} else if (type == FCS_IMAGE_KEY_CANCEL) {
+	} else if (type == FCS_CMD_TYPE_IMAGE_KEY_CANCEL) {
 		if (key_type == -1)
 			error_exit("Key Type parameter not set");
 		if (key_id == 0xFF)
