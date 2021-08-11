@@ -13,6 +13,8 @@
 #define FCS_CMD_TYPE_IMAGE_COUNTER_SET	1
 #define FCS_CMD_TYPE_IMAGE_KEY_CANCEL	2
 #define FCS_CMD_TYPE_VAB_FINISH		3
+#define FCS_CMD_TYPE_GEN_CS_KEY_OBJ	4
+#define FCS_CMD_TYPE_PRINT_CS_KEY_OBH	5
 
 #define SDM_CERT_MAGIC_NUM	0x25D04E7F
 
@@ -29,6 +31,15 @@
 
 #define SDOS_MIN_SZ		16
 #define SDOS_MAX_SZ		32672	/* 32K - 96 bytes */
+
+/* Crypto service key object */
+#define FCS_CS_KEY_DATA_MAX_SZ			128
+#define FCS_CS_KEY_IV_MAX_SZ			12
+#define FCS_CS_KEY_MAC_MAX_SZ			48
+#define FCS_CS_KEY_OBJECT_MAX_SZ		352
+
+#define FCS_CS_KEY_OBJECT_MAGIC_WORD		0x43736B4F
+#define FCS_CS_KEY_OBJECT_DATA_MAGIC_WORD	0x43736B64
 
 /*
  * struct fcs_hps_generic_header
@@ -347,6 +358,38 @@ struct fcs_aes_encrypt_buffer {
 	uint8_t  data[SDOS_MAX_SZ];
 	struct fcs_aes_encrypt_hash hmac_sha384;
 };
+
+/*
+ * struct fcs_cs_key_object_data
+ * @key_id: Non-zero unique key id.
+ * @key_size: 128 | 256 | 384 | 512 bits
+ * @key_type: AES(1)/HMAC(2)/ECC NIST P Curve(3)/ECC-BrainPool(4)
+ * @key_usage: bitmask (b0:Encrypt | b1:Decrypt | b2:Sign | b3:Verify | b4:Exchange)
+ * @key_protection: Unprotected(0)/BootDIMK(1)/User IID PUF(2)/Intel IID PUF(3)
+ * @key_wrap_version: Wrapping Key security version if key protection field is 0x1
+ * @data: Key data
+ * @iv: IV used in key protection. All 0 in unprotected key.
+ * @mac: Algorithm uses HMAC-384 for wrapped key. All 0 in unprotected key.
+ */
+struct fcs_cs_key_object_data {
+	uint32_t key_id;
+	uint32_t key_size;
+	uint8_t key_type;
+	uint32_t key_usage;
+	uint8_t key_protection;
+	uint8_t key_wrap_version;
+	uint8_t data[FCS_CS_KEY_DATA_MAX_SZ];
+	uint8_t iv[FCS_CS_KEY_IV_MAX_SZ];
+	uint8_t mac[FCS_CS_KEY_MAC_MAX_SZ];
+};
+
+/*
+ * Declare helper functions
+ */
+uint8_t fcs_cs_convert_char_to_hex(char c);
+int fcs_cs_key_object_encode(struct fcs_cs_key_object_data *object, uint8_t *buffer, int *size);
+int fcs_cs_key_object_decode(struct fcs_cs_key_object_data *object, uint8_t *buffer, int size);
+int fcs_cs_key_object_print(struct fcs_cs_key_object_data *object);
 
 #endif
 

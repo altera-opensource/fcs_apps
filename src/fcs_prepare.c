@@ -47,8 +47,13 @@ static const struct option opts[] = {
 	{"select", required_argument, NULL, 's'},
 	{"key_type", required_argument, NULL, 'k'},
 	{"key_id", required_argument, NULL, 'i'},
+	{"key_size", required_argument, NULL, 'x'},
+	{"key_usage", required_argument, NULL, 'u'},
+	{"gen_cs_key", required_argument, NULL, 'G'},
+	{"print_cs_key", required_argument, NULL, 'P'},
 	{"roothash", required_argument, NULL, 'r'},
 	{"finish", required_argument, NULL, 'F'},
+	{"textfile", required_argument, NULL, 't'},
 	{"imagefile", required_argument, NULL, 'f'},
 	{"print", no_argument, NULL, 'p'},
 	{"verbose", no_argument, NULL, 'v'},
@@ -87,6 +92,18 @@ static void fcs_prepare_usage(void)
 	printf("%-32s  %s  %s", "-F|--finish <signed_certificate> [-f|--imagefile <HPS_image_filename>]\n",
 	       "Concatentate the size to the certificate. If supplied, concatenate signed certficate to HPS VAB image.\n",
 	       "Output result is saved in filename = hps_image_signed.vab\n\n");
+
+	/* Crypto service key object helper */
+	printf("%-32s  %s  %s  %s  %s  %s  %s", "-G|--gen_cs_key <output_crypto_service_key_object_file>\n",
+	       "-i|--key_id <non-zero unique id>\n",
+	       "-x|--key_size <128|256|384|512>\n",
+	       "-k|--key_type <AES(1)/HMAC(2)/ECC NIST P Curve(3)/ECC-BrainPool(4)>\n",
+	       "-u|--key_usage <key usage bitmask. Encrypt(b0)|Decrypt(b1)|Sign(b2)|Verify(b3)|Exchange(b4)>\n",
+	       "-t|--textfile <text file contains key data in hexadecimal>\n",
+	       "Generate unprotected crypto service key object file.\n\n");
+	printf("%-32s  %s", "-P|--print_cs_key <crypto_service_key_object_file>\n",
+	       "Decode and print input crypto service key object file.\n\n");
+
 	printf("%-32s  %s", "-v|--verbose", "Show additional messages\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
 	printf("--------------------------------------------\n");
@@ -556,6 +573,253 @@ static int fcs_prepare_key(int key_type, int key_id,
 }
 
 /*
+ * fcs_prepare_generate_cs_key_object() - create unprotected crypto
+ * service key object file.
+ * @key_id: Non-zero unique key id.
+ * @key_size: 128 | 256 | 384 | 512 bits
+ * @key_type: AES(1)/HMAC(2)/ECC NIST P Curve(3)/ECC-BrainPool(4)
+ * @key_usage: bitmask (b0:Encrypt | b1:Decrypt | b2:Sign | b3:Verify | b4:Exchange)
+ * @key_data_file: Text file that contains key data in hexadecimal
+ * @key_obj_file: Output binary crypto service key object file
+ * @verbose: If true, print verbose output
+ *
+ * Return: 0 on success, or error on failure
+ *
+ */
+static int fcs_prepare_generate_cs_key_object(unsigned int key_id, int key_size,
+			   unsigned int key_type, unsigned int key_usage,
+			   char *key_data_file, char *key_obj_file, bool verbose)
+{
+	int ret = -1;
+	int buffer_size = FCS_CS_KEY_OBJECT_MAX_SZ;
+	uint8_t *buffer;
+	unsigned int key_usage_mask = key_usage;
+	struct fcs_cs_key_object_data object;
+	struct stat st;
+	int key_half_byte_size;
+	int filesz;
+	FILE *fpi, *fpo;
+
+	printf("\n---- Generate crypto service key object file ---- \n");
+
+	if (key_id == -1 || key_id == 0 || key_usage == 0 || key_data_file == NULL || key_obj_file == NULL) {
+		printf("Invalid inputs. key_id=%d key_usage=%02x key_data_file=%p key_obj_file=%p\n",
+			key_id, key_usage, key_data_file, key_obj_file);
+		return ret;
+	}
+
+	/* @key_size: 128 | 256 | 384 | 512 bits */
+	if (key_size != 128 && key_size != 256 && key_size != 384 && key_size != 512) {
+		printf("Invalid key size\n");
+		return ret;
+	}
+
+	/* @key_type: AES(1)/HMAC(2)/ECC NIST P Curve(3)/ECC-BrainPool(4) */
+	if (key_type < 1 || key_type > 4) {
+		printf("Invalid key type\n");
+		return ret;
+	}
+
+	/* @key_usage: bitmask (b0:Encrypt | b1:Decrypt | b2:Sign | b3:Verify | b4:Exchange) */
+	switch (key_type) {
+	case 1:
+		key_usage_mask &= ~(0x3);
+		if (key_size != 128 && key_size != 256) {
+			printf("Mismatch between key type and key size\n");
+			return ret;
+		}
+		break;
+	case 2:
+		key_usage_mask &= ~(0xC);
+		if (key_size != 256 && key_size != 384 && key_size != 512) {
+			printf("Mismatch between key type and key size\n");
+			return ret;
+		}
+		break;
+	case 3:
+	case 4:
+		/* Sign+Verify and Exchange are exclusive to each other */
+		if (key_usage_mask & 0xC)
+			key_usage_mask &= ~(0xC);
+		else
+			key_usage_mask &= ~(0x10);
+
+		if (key_size != 256 && key_size != 384) {
+			printf("Mismatch between key type and key size\n");
+			return ret;
+		}
+		break;
+	}
+	if (key_usage_mask) {
+		printf("Mismatch between key type and key usage\n");
+		return ret;
+	}
+
+	/* Prepare object */
+	memset(&object, 0, sizeof(struct fcs_cs_key_object_data));
+	object.key_id = key_id;
+	object.key_type = key_type;
+	object.key_usage = key_usage;
+	object.key_size = key_size;
+
+	/* Read key data from key_data_file */
+	fpi = fopen(key_data_file, "r");
+	if (!fpi) {
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			key_data_file, strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fpi), &st)) {
+		fclose(fpi);
+		fprintf(stderr, "Unable to get filesize %s:  %s\n",
+			key_data_file, strerror(errno));
+		return ret;
+	}
+	filesz = st.st_size;
+	key_half_byte_size = key_size / 4;
+
+	/* Exclude last EOL byte when checking file size */
+	if (filesz - 1 < key_half_byte_size) {
+		fclose(fpi);
+		printf("Key data file contains %d chars, "
+		       "but the key_size (%d bits) expects %d chars\n",
+			filesz - 1, key_size, key_half_byte_size);
+		return ret;
+	} else {
+		char c;
+		int idx = 0;
+		uint8_t hex;
+		uint8_t low = 0;
+
+		if (filesz - 1 > key_half_byte_size) {
+			printf("Key data is truncated. Key data file contains %d chars, "
+			       "but key_size (%d bits) only requires %d chars\n",
+				filesz - 1, key_size, key_half_byte_size);
+		}
+
+		do {
+			c = (char)fgetc(fpi);
+			hex = fcs_cs_convert_char_to_hex(c);
+			if (low) {
+				object.data[idx] |= hex;
+				idx++;
+			} else {
+				object.data[idx] |= (hex << 4);
+			}
+			low ^= 1;
+			key_half_byte_size--;
+		} while (key_half_byte_size > 0);
+		fclose(fpi);
+	}
+
+	/* Generate crypto service key object binary file */
+	buffer = calloc(buffer_size, sizeof(uint8_t));
+	if (buffer) {
+		if (verbose)
+			fcs_cs_key_object_print(&object);
+
+		ret = fcs_cs_key_object_encode(&object, buffer, &buffer_size);
+		if (ret == 0) {
+			struct stat fbuffer;
+			if (stat(key_obj_file, &fbuffer) == 0)
+				remove(key_obj_file);
+
+			fpo = fopen(key_obj_file, "wbx");
+			if (!fpo) {
+				fprintf(stderr, "Unable to open file %s:  %s\n",
+					key_obj_file, strerror(errno));
+				free(buffer);
+				return -1;
+			}
+			fwrite(buffer, 1, buffer_size, fpo);
+			fclose(fpo);
+
+			printf("Successfully generate %s file with %d bytes\n",
+				key_obj_file, buffer_size);
+		}
+		free(buffer);
+	} else {
+		printf("Failed to allocate memory\n");
+	}
+
+	return ret;
+}
+
+/*
+ * fcs_prepare_print_cs_key_object() - decode and print crypto service
+ * key object file.
+ * @key_obj_file: Crypto service key object file
+ * @verbose: If true, print verbose output
+ *
+ * Return: 0 on success, or error on failure
+ *
+ */
+static int fcs_prepare_print_cs_key_object(char *key_obj_file, bool verbose)
+{
+	int ret = -1;
+	int buffer_size = FCS_CS_KEY_OBJECT_MAX_SZ;
+	uint8_t *buffer = NULL;
+	struct fcs_cs_key_object_data object;
+	FILE *fp;
+
+	printf("\n---- Decode and print crypto service key object file ---- \n");
+
+	if (key_obj_file == NULL) {
+		printf("Invalid inputs. key_obj_file=%p\n", key_obj_file);
+		return ret;
+	}
+
+	buffer = calloc(buffer_size, sizeof(uint8_t));
+	if (buffer) {
+		struct stat st;
+		int filesz;
+
+		/* Open binary file */
+		fp = fopen(key_obj_file, "rbx");
+		if (!fp) {
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				key_obj_file, strerror(errno));
+			free(buffer);
+			return -1;
+		}
+		/* Get the file statistics */
+		if (fstat(fileno(fp), &st)) {
+			fclose(fp);
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				key_obj_file, strerror(errno));
+			free(buffer);
+			return -1;
+		}
+
+		filesz = st.st_size;
+		if (filesz <= buffer_size) {
+			/* Copy binary to buffer */
+			fseek(fp, 0, SEEK_CUR);
+			buffer_size = fread(buffer, 1, filesz, fp);
+			/* Decode and dump key content */
+			ret = fcs_cs_key_object_decode(&object, buffer, buffer_size);
+			if (ret == 0) {
+				printf("Successfully decode %s file with %d bytes\n",
+					key_obj_file, buffer_size);
+
+				fcs_cs_key_object_print(&object);
+			}
+		} else {
+			/* print error file size mismatch */
+			printf("File size mismatch (file size %d beyond limited size %d bytes)\n",
+				filesz, buffer_size);
+		}
+
+		fclose(fp);
+		free(buffer);
+	} else {
+		printf("Failed to allocate memory\n");
+	}
+
+	return ret;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -570,13 +834,14 @@ static void error_exit(char *msg)
 int main(int argc, char *argv[])
 {
 	bool verbose = false;
-	char *filename = NULL, *hpsfile =  NULL;
+	char *filename = NULL, *hpsfile =  NULL, *textfile = NULL;
+	unsigned int key_id = -1, key_usage = 0;
+	int key_type = -1, key_size = 0;
 	int counter_val = -1, counter_sel = -1;
-	int key_type = -1, key_id = 0xFF;
 	int index = 0, type = 0;
 	int c;
 
-	while ((c = getopt_long(argc, argv, "hvH:CKc:i:k:r:s:F:f:",
+	while ((c = getopt_long(argc, argv, "hvH:CKc:i:k:r:s:F:f:G:P:x:u:t:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'H':
@@ -603,29 +868,50 @@ int main(int argc, char *argv[])
 		case 'K':
 			type = FCS_CMD_TYPE_IMAGE_KEY_CANCEL;
 			break;
+		case 'G':
+			filename = optarg;
+			type = FCS_CMD_TYPE_GEN_CS_KEY_OBJ;
+			break;
+		case 'P':
+			filename = optarg;
+			type = FCS_CMD_TYPE_PRINT_CS_KEY_OBH;
+			break;
 		case 'k':
 			if (key_type != -1)
 				error_exit("Only one key type allowed");
 			key_type = atoi(optarg);
-			if ((key_type != FCS_USER_KEY) &&
-			    (key_type != FCS_INTEL_KEY)) {
-				key_type = -1;
-				error_exit("Invalid key_type (can only be 0 or 1)");
+			if (type != FCS_CMD_TYPE_GEN_CS_KEY_OBJ) {
+				if ((key_type != FCS_USER_KEY) &&
+				    (key_type != FCS_INTEL_KEY)) {
+					key_type = -1;
+					error_exit("Invalid key_type (can only be 0 or 1)");
+				}
 			}
 			break;
 		case 'i':
-			if (key_id != 0xFF)
+			if (key_id != -1)
 				error_exit("Only one key id allowed");
 			key_id = atoi(optarg);
-			if ((key_type == -1) && (key_type != FCS_USER_KEY)) {
-				key_type = -1;
-				error_exit("Invalid key_id (can only be -1 for user key)");
+			if (type != FCS_CMD_TYPE_GEN_CS_KEY_OBJ) {
+				if ((key_type == -1) && (key_type != FCS_USER_KEY)) {
+					key_type = -1;
+					error_exit("Invalid key_id (can only be -1 for user key)");
+				}
 			}
 			break;
 		case 'r':
 			if (key_type != FCS_USER_KEY)
 				error_exit("Roothash only valid for User Keys");
 			filename = optarg;
+			break;
+		case 'x':
+			key_size = atoi(optarg);
+			break;
+		case 'u':
+			key_usage = strtol(optarg, NULL, 0);
+			break;
+		case 't':
+			textfile = optarg;
 			break;
 		case 'F':
 			filename = optarg;
@@ -676,7 +962,7 @@ int main(int argc, char *argv[])
 	} else if (type == FCS_CMD_TYPE_IMAGE_KEY_CANCEL) {
 		if (key_type == -1)
 			error_exit("Key Type parameter not set");
-		if (key_id == 0xFF)
+		if (key_id == -1)
 			error_exit("Key ID parameter not set");
 
 		if (verbose)
@@ -690,6 +976,18 @@ int main(int argc, char *argv[])
 			error_exit("Invalid Key ID parameter (Must be in range 0 to 31)");
 
 		fcs_prepare_key(key_type, key_id, filename, verbose);
+
+	} else if (type == FCS_CMD_TYPE_GEN_CS_KEY_OBJ) {
+		if (fcs_prepare_generate_cs_key_object(key_id, key_size,
+			key_type, key_usage, textfile, filename, verbose)) {
+			error_exit("Fail to generate crypto service key object file.");
+		}
+
+	} else if (type == FCS_CMD_TYPE_PRINT_CS_KEY_OBH) {
+		if (fcs_prepare_print_cs_key_object(filename, verbose)) {
+			error_exit("Fail to print crypto service key object file.");
+		}
+
 	} else {
 		printf("%s[%d] Unrecognized request\n", __func__, __LINE__);
 		fcs_prepare_usage();
