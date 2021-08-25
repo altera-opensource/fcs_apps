@@ -235,6 +235,13 @@ struct fcs_crypto_key_import {
 	uint32_t obj_data_sz;
 };
 
+struct fcs_crypto_key_object {
+	uint32_t sid;
+	uint32_t kid;
+	char *obj_data;
+	uint32_t obj_data_sz;
+};
+
 /**
  * struct intel_fcs_dev_ioct: common structure passed to Linux
  *	kernel driver for all commands.
@@ -273,6 +280,7 @@ struct intel_fcs_dev_ioctl {
 		struct fcs_rom_patch_sha384 sha384;
 		struct fcs_crypto_service_session	s_session;
 		struct fcs_crypto_key_import		k_import;
+		struct fcs_crypto_key_object		k_object;
 	} com_paras;
 };
 
@@ -334,6 +342,7 @@ enum intel_fcs_command_code {
 	INTEL_FCS_DEV_CRYPTO_OPEN_SESSION_CMD = 0xA0,
 	INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD,
 	INTEL_FCS_DEV_CRYPTO_IMPORT_KEY_CMD,
+	INTEL_FCS_DEV_CRYPTO_EXPORT_KEY_CMD,
 };
 
 #define INTEL_FCS_DEV_VERSION_REQUEST \
@@ -407,6 +416,10 @@ enum intel_fcs_command_code {
 #define INTEL_FCS_DEV_CRYPTO_IMPORT_KEY \
 	_IOWR(INTEL_FCS_IOCTL, \
 	      INTEL_FCS_DEV_CRYPTO_IMPORT_KEY_CMD, struct intel_fcs_dev_ioctl)
+
+#define INTEL_FCS_DEV_CRYPTO_EXPORT_KEY \
+	_IOWR(INTEL_FCS_IOCTL, \
+	      INTEL_FCS_DEV_CRYPTO_EXPORT_KEY_CMD, struct intel_fcs_dev_ioctl)
 
 #endif
 
