@@ -48,6 +48,8 @@
 
 #define AES_CRYPT_CMD_MAX_SZ			4194304	/* set MAX size as 4 Mb for now */
 
+#define RANDOM_NUMBER_EXT_MAX_SZ		4080
+
 /*
  * struct fcs_hps_generic_header
  * @cert_magic_num: Certificate Magic Word (0x25D04E7F)

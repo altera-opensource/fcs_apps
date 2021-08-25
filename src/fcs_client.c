@@ -124,8 +124,9 @@ static void fcs_client_usage(void)
 	       "\tand Applications Specific Object Info(unique 2 byte identifier)\n\n");
 	printf("%-32s  %s", "-D|--aes_decrypt -i <input_filename> -o|--out_filename <output_filename>\n",
 	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
-	printf("%-32s  %s", "-R|--random <output_filename>\n",
-	       "\tReturn up to a 32-byte of random data\n\n");
+	printf("%-32s  %s  %s", "-R|--random <output_filename> -s|--sessionid <sessionid> -n|--context_id <context_id> -j <size>\n",
+	       "\tReturn random data with input size if session id and context id are provided\n",
+	       "\tOtherwise, return up to a 32-byte of random data if session id is not provided\n\n");
 	printf("%-32s  %s", "-T|--psgsigma_teardown -s|--sessionid <sessionid>\n",
 	       "Remove all previous black key provision sessions and delete keys assocated with those sessions\n\n");
 	printf("%-32s  %s", "-I|--get_chipid", "get the device chipID\n\n");
@@ -3330,6 +3331,79 @@ static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
 }
 
 /*
+ * fcs_random_number_ext() - get a random number with opened session
+ * @sid: session ID
+ * @cid: context ID
+ * @size: up to 4080 bytes random number size
+ * @filename: Filename to save random number into.
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_random_number_ext(uint32_t sid, uint32_t cid, uint32_t size,
+				 char *filename)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *out_buf;
+	int status;
+	FILE *fp;
+
+	if (size == 0 || size > RANDOM_NUMBER_EXT_MAX_SZ) {
+		printf("Invalid size. The size must be 4 bytes aligned between 4 to 4080 bytes\n");
+		return -1;
+	}
+
+	out_buf = calloc(size, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		return -1;
+	}
+
+	/* Fill in the structure */
+	dev_ioctl->com_paras.rn_gen_ext.sid = sid;
+	dev_ioctl->com_paras.rn_gen_ext.cid = cid;
+	dev_ioctl->com_paras.rn_gen_ext.rng_data = out_buf;
+	dev_ioctl->com_paras.rn_gen_ext.rng_sz = size;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_RANDOM_NUMBER_GEN_EXT);
+
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	/* Save result in binary file */
+	if (dev_ioctl->status == 0) {
+		fp = fopen(filename, "wbx");
+		if (!fp) {
+			fprintf(stderr, "can't open %s for writing: %s\n",
+				filename, strerror(errno));
+			memset(out_buf, 0, size);
+			free(out_buf);
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			free(dev_ioctl);
+			return -1;
+		}
+		fwrite(dev_ioctl->com_paras.rn_gen_ext.rng_data, size, 1, fp);
+		fclose(fp);
+	}
+
+	status = dev_ioctl->status;
+	memset(out_buf, 0, size);
+	free(out_buf);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return status;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -3626,7 +3700,14 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_RANDOM_NUMBER_GEN_CMD:
 		if (!filename)
 			error_exit("Missing filename to save data into");
-		ret = fcs_random_number(filename, verbose);
+		if (sessionid == 0) {
+			if (sha_dig_sz != 0) {
+				printf("Only support 32 bytes random number when without session id. -j option will be ignored.\n");
+			}
+			ret = fcs_random_number(filename, verbose);
+		} else {
+			ret = fcs_random_number_ext(sessionid, context_id, sha_dig_sz, filename);
+		}
 		break;
 	case INTEL_FCS_DEV_COUNTER_SET_CMD:
 		if (!filename)
