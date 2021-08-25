@@ -360,6 +360,30 @@ struct fcs_random_number_gen_ext {
 };
 
 /**
+ * struct fcs_sdos_data_ext - SDOS encryption/decryption
+ * @sid: session ID
+ * @cid: context ID
+ * @op_mode: SDOS operation mode
+ * 	1	encryption
+ * 	0	decryption
+ * @oid1: owner ID word 1, valid for date decryption only
+ * @oid2: owner ID word 2, valid for date decryption only
+ * @src: the virtual address of the input data
+ * @src_size: the size of the input data
+ * @dst: the virtual address of the output data
+ * dst_size: the size of the output data
+ */
+struct fcs_sdos_data_ext {
+	uint32_t sid;
+	uint32_t cid;
+	int op_mode;
+	void *src;
+	uint32_t src_size;
+	void *dst;
+	uint32_t dst_size;
+};
+
+/**
  * struct intel_fcs_dev_ioct: common structure passed to Linux
  *	kernel driver for all commands.
  * @status: Used for the return code.
@@ -403,6 +427,7 @@ struct intel_fcs_dev_ioctl {
 		struct fcs_ecdsa_data		ecdsa_data;
 		struct fcs_ecdsa_sha2_data	ecdsa_sha2_data;
 		struct fcs_random_number_gen_ext	rn_gen_ext;
+		struct fcs_sdos_data_ext	data_sdos_ext;
 	} com_paras;
 };
 
@@ -444,6 +469,8 @@ struct intel_fcs_dev_ioctl {
  * @INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD:
  *
  * @INTEL_FCS_DEV_RANDOM_NUMBER_GEN_EXT_CMD:
+ *
+ * @INTEL_FCS_DEV_SDOS_DATA_EXT_CMD:
  */
 enum intel_fcs_command_code {
 	INTEL_FCS_DEV_COMMAND_NONE = 0,
@@ -479,6 +506,7 @@ enum intel_fcs_command_code {
 	INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD,
 	INTEL_FCS_DEV_CRYPTO_ECDH_REQUEST_CMD,
 	INTEL_FCS_DEV_RANDOM_NUMBER_GEN_EXT_CMD,
+	INTEL_FCS_DEV_SDOS_DATA_EXT_CMD,
 };
 
 #define INTEL_FCS_DEV_VERSION_REQUEST \
@@ -604,6 +632,10 @@ enum intel_fcs_command_code {
 #define INTEL_FCS_DEV_RANDOM_NUMBER_GEN_EXT \
 	_IOWR(INTEL_FCS_IOCTL, \
 	      INTEL_FCS_DEV_RANDOM_NUMBER_GEN_EXT_CMD, struct intel_fcs_dev_ioctl)
+
+#define INTEL_FCS_DEV_SDOS_DATA_EXT \
+	_IOWR(INTEL_FCS_IOCTL, \
+	      INTEL_FCS_DEV_SDOS_DATA_EXT_CMD, struct intel_fcs_dev_ioctl)
 
 #endif
 

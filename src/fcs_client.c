@@ -38,6 +38,9 @@
 
 #define NOT_ALLOWED_UNDER_SECURITY_SETTINGS	0x85
 
+#define SDOS_MAGIC_WORD		0xACBDBDED
+#define SDOS_HEADER_PADDING	0x01020304
+
 const char *dev = "/dev/fcs";
 
 /*
@@ -119,11 +122,13 @@ static void fcs_client_usage(void)
 	       "\tbe activated only when the counter value is set to -1 at authorization certificate\n\n");
 	printf("%-32s  %s", "-G|--get_provision_data <output_filename> -p|--print\n",
 	       "\tGet the provisioning data from SDM\n\n");
-	printf("%-32s  %s %s", "-E|--aes_encrypt -i <input_filename> -o <output_filename> -r <owner_id> -d <ASOI>\n",
-	       "\tAES Encrypt a buffer of up to 32K-96 bytes - requires owner_id file (8 bytes)\n",
-	       "\tand Applications Specific Object Info(unique 2 byte identifier)\n\n");
-	printf("%-32s  %s", "-D|--aes_decrypt -i <input_filename> -o|--out_filename <output_filename>\n",
-	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n\n");
+	printf("%-32s  %s %s %s", "-E|--aes_encrypt -i <input_filename> -o <output_filename> -r <owner_id> -d <ASOI> -s <sid> -n <cid>\n",
+	       "\tAES Encrypt a buffer of up to 32K-96 bytes - requires 8 bytes owner_id\n",
+	       "\tand Applications Specific Object Info(unique 2 bytes identifier)\n",
+	       "\tSend session based request if session id and context id are provided\n\n");
+	printf("%-32s  %s %s", "-D|--aes_decrypt -i <input_filename> -o|--out_filename <output_filename> -s <sid> -n <cid>\n",
+	       "\tAES Decrypt a buffer of up to 32K-96 bytes\n",
+	       "\tSend session based request if session id and context id are provided\n\n");
 	printf("%-32s  %s  %s", "-R|--random <output_filename> -s|--sessionid <sessionid> -n|--context_id <context_id> -j <size>\n",
 	       "\tReturn random data with input size if session id and context id are provided\n",
 	       "\tOtherwise, return up to a 32-byte of random data if session id is not provided\n\n");
@@ -917,7 +922,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 
 	/* Initialize the header */
 	aes_hdr = (struct fcs_aes_crypt_header *)in_buf;
-	aes_hdr->magic_number = 0xACBDBDED;
+	aes_hdr->magic_number = SDOS_MAGIC_WORD;
 	calc = filesize % 32;
 	if (calc)
 		pad = 32 - calc;
@@ -929,7 +934,7 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 		aes_hdr->owner_id[i] = (uint8_t)own;
 		own >>= 8;
 	}
-	aes_hdr->hdr_pad = 0x01020304;
+	aes_hdr->hdr_pad = SDOS_HEADER_PADDING;
 	/* to initialize for the generated IV */
 	for (i = 0; i < sizeof(aes_hdr->iv_field); i++)
 		aes_hdr->iv_field[i] = 0;
@@ -3404,6 +3409,338 @@ static int fcs_random_number_ext(uint32_t sid, uint32_t cid, uint32_t size,
 }
 
 /*
+ * fcs_sdos_encrypt_ext() - SDOS encryption with opened session
+ * @sid: session ID
+ * @cid: context ID
+ * @filename: Filename holding data to encrypt
+ * @outfilename: Resulting filename holding encrypted data
+ * @identifier: Binary data identifier
+ * @own: Owner key
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_sdos_encrypt_ext(uint32_t sid, uint32_t cid,
+				char *filename, char *outfilename,
+				int identifier, uint64_t own, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	struct fcs_aes_crypt_header *aes_hdr;
+	uint8_t *in_buf, *out_buf;
+	size_t filesize, sz;
+	int calc, pad = 0;
+	struct stat st;
+	int status, i;
+	FILE *fp;
+
+	/* Open input binary file */
+	fp = fopen(filename, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
+	/* Get the file statistics */
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
+
+	/* Find the filesize */
+	filesize = st.st_size;
+	if (verbose)
+		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
+
+	/* Make sure the data is less than 32K - 96 bytes */
+	if (filesize > SDOS_PLAINDATA_MAX_SZ ||
+	    filesize < SDOS_PLAINDATA_MIN_SZ) {
+		fprintf(stderr, "Invalid filesize %ld. Must be > 16 and <= 32,672\n",
+			filesize);
+		fclose(fp);
+		return -1;
+	}
+
+	/* Allocate a buffer for the input data */
+	in_buf = calloc(SDOS_DECRYPTED_MAX_SZ, sizeof(uint8_t));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		fclose(fp);
+		return -1;
+	}
+	/* Allocate a buffer for the output data */
+	out_buf = calloc(SDOS_ENCRYPTED_MAX_SZ, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			outfilename, strerror(errno));
+		fclose(fp);
+		free(in_buf);
+		return -1;
+	}
+
+	/* Read the file into the buffer (after the header) */
+	sz = fread(in_buf + sizeof(struct fcs_aes_crypt_header), 1, filesize, fp);
+	fclose(fp);
+	if (sz != filesize) {
+		fprintf(stderr, "can't read entire file %s\n", filename);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	/* Initialize the header */
+	aes_hdr = (struct fcs_aes_crypt_header *)in_buf;
+	aes_hdr->magic_number = SDOS_MAGIC_WORD;
+	calc = filesize % 32;
+	if (calc)
+		pad = 32 - calc;
+	aes_hdr->data_len = filesize + pad;
+	aes_hdr->pad = pad;
+	aes_hdr->srk_indx = 0;
+	aes_hdr->app_spec_obj_info = identifier;
+	for (i = 0; i < sizeof(aes_hdr->owner_id); i++) {
+		aes_hdr->owner_id[i] = (uint8_t)own;
+		own >>= 8;
+	}
+	aes_hdr->hdr_pad = SDOS_HEADER_PADDING;
+	/* to initialize for the generated IV */
+	for (i = 0; i < sizeof(aes_hdr->iv_field); i++)
+		aes_hdr->iv_field[i] = 0;
+
+	if (verbose)
+		dump_aes_hdr(aes_hdr);
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.data_sdos_ext.sid = sid;
+	dev_ioctl->com_paras.data_sdos_ext.cid = cid;
+	dev_ioctl->com_paras.data_sdos_ext.op_mode = 1;
+	dev_ioctl->com_paras.data_sdos_ext.src = in_buf;
+	dev_ioctl->com_paras.data_sdos_ext.src_size = filesize + pad +
+					 sizeof(struct fcs_aes_crypt_header);
+	dev_ioctl->com_paras.data_sdos_ext.dst = out_buf;
+	dev_ioctl->com_paras.data_sdos_ext.dst_size = SDOS_ENCRYPTED_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_SDOS_DATA_EXT);
+
+	status = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (status) {
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		return status;
+	}
+
+	/* Save result in binary file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	if (verbose) {
+		printf("Save encrypted data to %s\n", outfilename);
+		printf("Saving %d [0x%X] bytes\n",
+			dev_ioctl->com_paras.data_sdos_ext.dst_size,
+			dev_ioctl->com_paras.data_sdos_ext.dst_size);
+	}
+
+	fwrite(dev_ioctl->com_paras.data_sdos_ext.dst,
+	       dev_ioctl->com_paras.data_sdos_ext.dst_size, 1, fp);
+
+	fclose(fp);
+	memset(in_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+	memset(out_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+	free(in_buf);
+	free(out_buf);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return status;
+}
+
+/*
+ * fcs_sdos_decrypt_ext() - SDOS decryption with opened session
+ * @sid: session ID
+ * @cid: context ID
+ * @filename: Filename holding encrypted data to decrypt
+ * @outfilename: Resulting filename holding decrypted data
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_sdos_decrypt_ext(uint32_t sid, uint32_t cid,
+				char *filename, char *outfilename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	struct fcs_aes_crypt_header *aes_hdr;
+	uint8_t *in_buf, *out_buf;
+	size_t filesize, sz;
+	struct stat st;
+	int status;
+	FILE *fp;
+
+	/* Open input binary file */
+	fp = fopen(filename, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
+
+	/* Get the file statistics */
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		return -1;
+	}
+
+	/* Find the filesize */
+	filesize = st.st_size;
+	if (verbose)
+		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
+
+	/* Make sure the data (header + payload) is within the range  */
+	if (filesize > SDOS_ENCRYPTED_MAX_SZ ||
+	    filesize < SDOS_ENCRYPTED_MIN_SZ) {
+		fprintf(stderr, "Invalid filesize %ld. Must be >= 120 and <= 32,760\n",
+			filesize);
+		fclose(fp);
+		return -1;
+	}
+
+	/* Allocate a buffer for the input data */
+	in_buf = calloc(SDOS_ENCRYPTED_MAX_SZ, sizeof(uint8_t));
+	if (!in_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		fclose(fp);
+		return -1;
+	}
+	/* Allocate a buffer for the output data */
+	out_buf = calloc(SDOS_DECRYPTED_MAX_SZ, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			outfilename, strerror(errno));
+		fclose(fp);
+		free(in_buf);
+		return -1;
+	}
+
+	/* Read the file into the buffer (input file includes the header) */
+	sz = fread(in_buf, 1, filesize, fp);
+	fclose(fp);
+	if (sz != filesize) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, filesize, filename, strerror(errno));
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.data_sdos_ext.sid = sid;
+	dev_ioctl->com_paras.data_sdos_ext.cid = cid;
+	dev_ioctl->com_paras.data_sdos_ext.op_mode = 0;
+	dev_ioctl->com_paras.data_sdos_ext.src = in_buf;
+	dev_ioctl->com_paras.data_sdos_ext.src_size = filesize;
+	dev_ioctl->com_paras.data_sdos_ext.dst = out_buf;
+	dev_ioctl->com_paras.data_sdos_ext.dst_size = SDOS_DECRYPTED_MAX_SZ;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_SDOS_DATA_EXT);
+
+	status = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (status) {
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		return status;
+	}
+
+	/* Save result in binary file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+		free(in_buf);
+		free(out_buf);
+		return -1;
+	}
+
+	aes_hdr = (struct fcs_aes_crypt_header *)out_buf;
+	if (verbose)
+		dump_aes_hdr(aes_hdr);
+
+	if (verbose) {
+		printf("Save decrypted data to %s\n", outfilename);
+		printf("Saving %d [0x%X] bytes\n",
+			(aes_hdr->data_len - aes_hdr->pad),
+			(aes_hdr->data_len - aes_hdr->pad));
+	}
+
+	/* Write out the data but skip the header */
+	fwrite(out_buf + sizeof(struct fcs_aes_crypt_header),
+	       (aes_hdr->data_len - aes_hdr->pad), 1, fp);
+
+	fclose(fp);
+	memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
+	memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
+	free(in_buf);
+	free(out_buf);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return status;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -3734,12 +4071,20 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_DATA_ENCRYPTION_CMD:
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
-		ret = fcs_sdos_encrypt(filename, outfilename, id, own, verbose);
+		if (sessionid == 0) {
+			ret = fcs_sdos_encrypt(filename, outfilename, id, own, verbose);
+		} else {
+			ret = fcs_sdos_encrypt_ext(sessionid, context_id, filename, outfilename, id, own, verbose);
+		}
 		break;
 	case INTEL_FCS_DEV_DATA_DECRYPTION_CMD:
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
-		ret = fcs_sdos_decrypt(filename, outfilename, verbose);
+		if (sessionid == 0) {
+			ret = fcs_sdos_decrypt(filename, outfilename, verbose);
+		} else {
+			ret = fcs_sdos_decrypt_ext(sessionid, context_id, filename, outfilename, verbose);
+		}
 		break;
 	case INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD:
 		ret = fcs_psgsigma_teardown(sessionid);
