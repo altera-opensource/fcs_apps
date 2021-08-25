@@ -72,6 +72,8 @@ static const struct option opts[] = {
 	{"get_certificate", required_argument, NULL, 'F'},
 	{"certificate_reload", required_argument, NULL, 'L'},
 	{"get_rom_patch_sha384", required_argument, NULL, 'w'},
+	{"open_session", no_argument, NULL, 'e'},
+	{"close_session", no_argument, NULL, 'l'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -113,6 +115,10 @@ static void fcs_client_usage(void)
 	       "\tGet the FPGA attestation certificate\n\n");
 	printf("%-32s  %s", "-L|--certificate_reload <cer_request>\n",
 	       "\tFPGA attestation certificate on reload\n\n");
+	printf("%-32s  %s", "-e|--open_session",
+	       "Open crypto service session\n\n");
+	printf("%-32s  %s", "-l|--close_session -s|--sessionid <sessionid>\n",
+	       "\tClose crypto service session\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1691,6 +1697,68 @@ static int fcs_service_get_rom_patch_sha384(char *filename, bool verbose)
 }
 
 /*
+ * fcs_open_service_session() - open crypto service session
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_open_service_session()
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = -1;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl->status = -1;
+	dev_ioctl->com_paras.s_session.sid = -1;
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_OPEN_SESSION);
+
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	if (dev_ioctl->status == 0) {
+		printf("Crypto service sessionID=0x%x\n", dev_ioctl->com_paras.s_session.sid);
+	}
+	ret = dev_ioctl->status;
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
+/*
+ * fcs_close_service_session - close crypto service session
+ * @sid: session ID which will be closed
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_close_service_session(uint32_t sid)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	int ret = -1;
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+		malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl->status = -1;
+	dev_ioctl->com_paras.s_session.sid = sid;
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION);
+
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	ret = dev_ioctl->status;
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -1718,7 +1786,7 @@ int main(int argc, char *argv[])
 	int type = -1;
 	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "phvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:w:",
+	while ((c = getopt_long(argc, argv, "ephlvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1785,8 +1853,6 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD;
 			break;
 		case 's':
-			if (command != INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD)
-				error_exit("Only one command allowed");
 			sessionid = atoi(optarg);
 			break;
 		case 'I':
@@ -1858,6 +1924,16 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_GET_ROM_PATCH_SHA384_CMD;
 			filename = optarg;
+			break;
+		case 'e':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_OPEN_SESSION_CMD;
+			break;
+		case 'l':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD;
 			break;
 		case 'h':
 		default:
@@ -1932,6 +2008,12 @@ int main(int argc, char *argv[])
 		if (!filename)
 			error_exit("Missing filename to save data into");
 		ret = fcs_service_get_rom_patch_sha384(filename, verbose);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_OPEN_SESSION_CMD:
+		ret = fcs_open_service_session();
+		break;
+	case INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD:
+		ret = fcs_close_service_session(sessionid);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
