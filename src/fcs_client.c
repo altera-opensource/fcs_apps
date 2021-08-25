@@ -74,6 +74,7 @@ static const struct option opts[] = {
 	{"get_rom_patch_sha384", required_argument, NULL, 'w'},
 	{"open_session", no_argument, NULL, 'e'},
 	{"close_session", no_argument, NULL, 'l'},
+	{"import_service_key", no_argument, NULL, 'B'},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -119,6 +120,8 @@ static void fcs_client_usage(void)
 	       "Open crypto service session\n\n");
 	printf("%-32s  %s", "-l|--close_session -s|--sessionid <sessionid>\n",
 	       "\tClose crypto service session\n\n");
+	printf("%-32s  %s", "-B|--import_service_key -s|--sessionid <sessionid> -i <input_filename>\n",
+	       "\tImport crypto service key to the device\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -1759,6 +1762,92 @@ static int fcs_close_service_session(uint32_t sid)
 }
 
 /*
+ * fcs_import_service_key - import the crypto service key
+ * @sid: session ID
+ * @filename: file name of the key object
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_import_service_key(uint32_t sid, char *filename)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	size_t sz, filesize;
+	struct stat st;
+	void *buffer;
+	FILE *file;
+	int ret = -1;
+
+	if (!filename) {
+		fprintf(stderr, "Null filename:  %s\n", strerror(errno));
+		return -1;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return -1;
+	}
+
+	file = fopen(filename, "rbx");
+	if (!file) {
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		free(dev_ioctl);
+		return -1;
+	}
+
+	/* Get the file statistics */
+	if (fstat(fileno(file), &st)) {
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			filename, strerror(errno));
+		free(dev_ioctl);
+		fclose(file);
+		return -1;
+	}
+
+	filesize = st.st_size;
+	buffer = calloc(filesize, sizeof(uint8_t));
+	if (!buffer) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			filename, strerror(errno));
+		free(dev_ioctl);
+		fclose(file);
+		return -1;
+	}
+
+	/* Read the file into the buffer */
+	sz = fread(buffer, 1, filesize, file);
+	if (sz != filesize) {
+		fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+			sz, filesize, filename, strerror(errno));
+		memset(buffer, 0, filesize);
+		free(buffer);
+		free(dev_ioctl);
+		fclose(file);
+		return -1;
+	}
+	fclose(file);
+
+	/* fill in the structure */
+	dev_ioctl->com_paras.k_import.obj_data = buffer;
+	dev_ioctl->com_paras.k_import.obj_data_sz = filesize;
+	dev_ioctl->com_paras.k_import.hd.sid = sid;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_IMPORT_KEY);
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	ret = dev_ioctl->status;
+
+	memset(buffer, 0, filesize);
+	free(buffer);
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return ret;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -1786,7 +1875,7 @@ int main(int argc, char *argv[])
 	int type = -1;
 	char *endptr;
 
-	while ((c = getopt_long(argc, argv, "ephlvAEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:w:",
+	while ((c = getopt_long(argc, argv, "ephlvABEDTISMR:t:V:C:G:F:L:y:a:s:i:d:o:r:c:w:",
 				opts, &index)) != -1) {
 		switch (c) {
 		case 'V':
@@ -1935,6 +2024,11 @@ int main(int argc, char *argv[])
 				error_exit("Only one command allowed");
 			command = INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD;
 			break;
+		case 'B':
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_CRYPTO_IMPORT_KEY_CMD;
+			break;
 		case 'h':
 		default:
 			fcs_client_usage();
@@ -2014,6 +2108,9 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_CLOSE_SESSION_CMD:
 		ret = fcs_close_service_session(sessionid);
+		break;
+	case INTEL_FCS_DEV_CRYPTO_IMPORT_KEY_CMD:
+		ret = fcs_import_service_key(sessionid, filename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:
