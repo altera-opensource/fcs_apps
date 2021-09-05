@@ -2220,7 +2220,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 	dev_ioctl->com_paras.a_crypt.cpara.bmode = bmode;
 	dev_ioctl->com_paras.a_crypt.cpara.aes_mode = aes_mode;
 	if (bmode > 0)
-		strncpy(dev_ioctl->com_paras.a_crypt.cpara.iv_field, iv_field_buf, 16);
+		memcpy(dev_ioctl->com_paras.a_crypt.cpara.iv_field, iv_field_buf, 16);
 	dev_ioctl->com_paras.a_crypt.sid = sid;
 	dev_ioctl->com_paras.a_crypt.cid = cid;
 	dev_ioctl->com_paras.a_crypt.kuid = kid;
