@@ -1464,6 +1464,7 @@ static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
 	if (filesize > ATTESTATION_MEASUREMENT_CMD_MAX_SZ) {
 		fprintf(stderr, "Invalid filesize %ld. Must less then 4K-4 bytes\n",
 			filesize);
+		fclose(fp);
 		return ret;
 	}
 
@@ -2090,6 +2091,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 		iv_field_sz = st.st_size;
 		if (iv_field_sz > 16) {
 			printf("%s[%d] incorrect iv_fileds_size=%ld\n", __func__, __LINE__, iv_field_sz);
+			fclose(fp);
 			return ret;
 		}
 
@@ -2983,6 +2985,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!fp0) {
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			ptr[0], strerror(errno));
+		return ret;
 	}
 	if (fstat(fileno(fp0), &st0)) {
 		fclose(fp0);
@@ -3010,7 +3013,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	if (kid == 0) {
 		fp2 = fopen(ptr[2], "rbx");
-		if (!fp1) {
+		if (!fp2) {
 			fclose(fp0);
 			fclose(fp1);
 			fprintf(stderr, "can't open %s for reading: %s\n",
