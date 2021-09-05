@@ -862,6 +862,16 @@ static int fcs_sdos_encrypt(char *filename, char *outfilename,
 	int status, i;
 	FILE *fp;
 
+	if (!filename) {
+		fprintf(stderr, "NULL filename:  %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (!outfilename) {
+		fprintf(stderr, "NULL outfilename:  %s\n", strerror(errno));
+		return -1;
+	}
+
 	/* Open input binary file */
 	fp = fopen(filename, "rbx");
 	if (!fp) {
@@ -1027,6 +1037,16 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	struct stat st;
 	int status;
 	FILE *fp;
+
+	if (!filename) {
+		fprintf(stderr, "NULL filename:  %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (!outfilename) {
+		fprintf(stderr, "NULL outfilename:  %s\n", strerror(errno));
+		return -1;
+	}
 
 	/* Open input binary file */
 	fp = fopen(filename, "rbx");
@@ -2074,6 +2094,11 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* get iv_field data */
 	if (bmode > 0) {
+		if (!iv_field) {
+			fprintf(stderr, "NULL iv_field:  %s\n", strerror(errno));
+			return -1;
+		}
+
 		fp = fopen(iv_field, "rbx");
 		if (!fp) {
 			fprintf(stderr, "can't open iv file %s for reading: %s\n",
@@ -2372,11 +2397,6 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	int ret = -1;
 	char *ptr[2];
 	int i = 0;
-
-	if (!in_f_name_list || !out_f_name) {
-		fprintf(stderr, "Missing input files (-z) or output file (-o) option\n");
-		return ret;
-	}
 
 	/* parse to data and mac binary file */
 	ptr[i] = strtok(in_f_name_list, "#");
@@ -3436,6 +3456,16 @@ static int fcs_sdos_encrypt_ext(uint32_t sid, uint32_t cid,
 	int status, i;
 	FILE *fp;
 
+	if (!filename) {
+		fprintf(stderr, "NULL filename:  %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (!outfilename) {
+		fprintf(stderr, "NULL outfilename:  %s\n", strerror(errno));
+		return -1;
+	}
+
 	/* Open input binary file */
 	fp = fopen(filename, "rbx");
 	if (!fp) {
@@ -3607,6 +3637,16 @@ static int fcs_sdos_decrypt_ext(uint32_t sid, uint32_t cid,
 	struct stat st;
 	int status;
 	FILE *fp;
+
+	if (!filename) {
+		fprintf(stderr, "NULL filename:  %s\n", strerror(errno));
+		return -1;
+	}
+
+	if (!outfilename) {
+		fprintf(stderr, "NULL outfilename:  %s\n", strerror(errno));
+		return -1;
+	}
 
 	/* Open input binary file */
 	fp = fopen(filename, "rbx");
@@ -4096,12 +4136,18 @@ int main(int argc, char *argv[])
 		ret = fcs_get_chip_id();
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_SUBKEY_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_get_subkey(filename, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_MEASUREMENT_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_get_measure(filename, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_GET_CERTIFICATE_CMD:
+		if (!outfilename)
+			error_exit("Missing output filename");
 		ret = fcs_attestation_get_certificate(cer_request, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD:
@@ -4119,42 +4165,66 @@ int main(int argc, char *argv[])
 		ret = fcs_close_service_session(sessionid);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_IMPORT_KEY_CMD:
+		if (!filename)
+			error_exit("Missing key object filename");
 		ret = fcs_import_service_key(sessionid, filename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_EXPORT_KEY_CMD:
+		if (!outfilename)
+			error_exit("Missing key object filename to save data into");
 		ret = fcs_export_service_key(sessionid, keyid, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_REMOVE_KEY_CMD:
 		ret = fcs_remove_service_key(sessionid, keyid);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_GET_KEY_INFO_CMD:
+		if (!outfilename)
+			error_exit("Missing filename to save data into");
 		ret = fcs_get_service_key_info(sessionid, keyid, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_aes_crypt(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_CMD:
+		if (!filename_list || !outfilename)
+			error_exit("Missing input file list or output filename");
 		ret = fcs_mac_verify(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_ecdsa_hash_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_ecdsa_sha2_data_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD:
+		if (!filename_list || !outfilename)
+			error_exit("Missing input file list or output filename");
 		ret = fcs_ecdsa_hash_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD:
+		if (!filename_list || !outfilename)
+			error_exit("Missing input file list or output filename");
 		ret = fcs_ecdsa_sha2_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD:
+		if (!outfilename)
+			error_exit("Missing output filename");
 		ret = fcs_ecdsa_get_public_key(sessionid, context_id, keyid, ecc_algo, outfilename);
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDH_REQUEST_CMD:
+		if (!filename || !outfilename)
+			error_exit("Missing input or output filename");
 		ret = fcs_ecdh_request(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
