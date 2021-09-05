@@ -1353,7 +1353,7 @@ static int fcs_get_subkey(char *filename, char *outfilename, bool verbose)
 	}
 
 	/* allocate a buffer for the input data */
-	in_buf = calloc(ATTESTATION_SUBKEY_CMD_MAX_SZ, sizeof(in_buf));
+	in_buf = calloc(ATTESTATION_SUBKEY_CMD_MAX_SZ, sizeof(char));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			 filename, strerror(errno));
@@ -1362,7 +1362,7 @@ static int fcs_get_subkey(char *filename, char *outfilename, bool verbose)
 	}
 
 	/* allocate a buffer for the output data */
-	out_buf = calloc(ATTESTATION_SUBKEY_RSP_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(ATTESTATION_SUBKEY_RSP_MAX_SZ, sizeof(char));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			outfilename, strerror(errno));
@@ -1489,7 +1489,7 @@ static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
 	}
 
 	/* allocate a buffer for the input data */
-	in_buf = calloc(ATTESTATION_MEASUREMENT_CMD_MAX_SZ, sizeof(in_buf));
+	in_buf = calloc(ATTESTATION_MEASUREMENT_CMD_MAX_SZ, sizeof(char));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			filename, strerror(errno));
@@ -1498,7 +1498,7 @@ static int fcs_get_measure(char *filename, char *outfilename, bool verbose)
 	}
 
 	/* allocate a buffer for the output data */
-	out_buf = calloc(ATTESTATION_MEASUREMENT_RSP_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(ATTESTATION_MEASUREMENT_RSP_MAX_SZ, sizeof(char));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			outfilename, strerror(errno));
@@ -1593,7 +1593,7 @@ int fcs_attestation_get_certificate(int c_request, char *outfilename, bool verbo
 	int ret = -1;
 
 	/* allocate a buffer for the output data */
-	out_buf = calloc(ATTESTATION_CERTIFICATE_RSP_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(ATTESTATION_CERTIFICATE_RSP_MAX_SZ, sizeof(char));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			outfilename, strerror(errno));
@@ -1934,7 +1934,7 @@ static int fcs_export_service_key(uint32_t sid, uint32_t kid, char *filename)
 	}
 
 	/* allocate a buffer for the output data */
-	out_buf = calloc(CRYPTO_EXPORTED_KEY_OBJECT_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(CRYPTO_EXPORTED_KEY_OBJECT_MAX_SZ, sizeof(char));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			filename, strerror(errno));
@@ -2029,7 +2029,7 @@ static int fcs_get_service_key_info(uint32_t sid, uint32_t kid, char *filename)
 	}
 
 	/* allocate a buffer for the output data */
-	out_buf = calloc(CRYPTO_GET_KEY_INFO_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(CRYPTO_GET_KEY_INFO_MAX_SZ, sizeof(char));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			filename, strerror(errno));
@@ -2085,7 +2085,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 			 char *in_f_name, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf, *iv_field_buf;
+	uint8_t *in_buf, *out_buf, *iv_field_buf;
 	size_t iv_field_sz, input_sz, sz;
 	int calc, pad = 0;
 	struct stat st;
@@ -2120,7 +2120,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 			return ret;
 		}
 
-		iv_field_buf = calloc(16, sizeof(iv_field_buf));
+		iv_field_buf = calloc(16, sizeof(uint8_t));
 		if (!iv_field_buf) {
 			 fprintf(stderr, "can't calloc buffer for iv:  %s\n",
 				 strerror(errno));
@@ -2174,7 +2174,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 		pad = 32 - calc;
 	input_sz = input_sz + pad;
 
-	in_buf = calloc(input_sz, sizeof(in_buf));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for input %s:  %s\n",
 			in_f_name, strerror(errno));
@@ -2195,7 +2195,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(input_sz, sizeof(out_buf));
+	out_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for output %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2271,7 +2271,7 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 		int op_mode, int dig_sz, char *in_f_name, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t input_sz, sz;
 	struct stat st;
 	int ret = -1;
@@ -2294,7 +2294,7 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	input_sz = st.st_size;
 
-	in_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(in_buf));
+	in_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name, strerror(errno));
@@ -2311,7 +2311,7 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2387,7 +2387,7 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
                 int dig_sz, char *in_f_name_list, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	FILE *fp0, *fp1, *fp;
 	struct stat st0, st1;
 	size_t input_sz0, sz0;
@@ -2443,7 +2443,7 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	input_sz = input_sz0 + input_sz1;
 
-	in_buf = calloc(input_sz, sizeof(in_buf));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name_list, strerror(errno));
@@ -2471,7 +2471,7 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(out_sz, sizeof(out_buf));
+	out_buf = calloc(out_sz, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2550,7 +2550,7 @@ static int fcs_ecdsa_hash_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 		int ecc_algo, char *in_f_name, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t input_sz, sz;
 	struct stat st;
 	int ret = -1;
@@ -2573,7 +2573,7 @@ static int fcs_ecdsa_hash_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	input_sz = st.st_size;
 
-	in_buf = calloc(input_sz + 1, sizeof(in_buf));
+	in_buf = calloc(input_sz + 1, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name, strerror(errno));
@@ -2590,7 +2590,7 @@ static int fcs_ecdsa_hash_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2667,7 +2667,7 @@ static int fcs_ecdsa_sha2_data_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 		int ecc_algo, char *in_f_name, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t input_sz, sz;
 	struct stat st;
 	int ret = -1;
@@ -2690,7 +2690,7 @@ static int fcs_ecdsa_sha2_data_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	input_sz = st.st_size;
 
-	in_buf = calloc(input_sz + 1, sizeof(in_buf));
+	in_buf = calloc(input_sz + 1, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name, strerror(errno));
@@ -2707,7 +2707,7 @@ static int fcs_ecdsa_sha2_data_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2786,7 +2786,7 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	struct intel_fcs_dev_ioctl *dev_ioctl;
 	FILE *fp0, *fp1, *fp2, *fp;
 	struct stat st0, st1, st2;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t sz0, sz1, sz2;
 	size_t input_sz0;
 	size_t input_sz1;
@@ -2858,7 +2858,7 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	else
 		input_sz = input_sz0 + input_sz1;
 
-	in_buf = calloc(input_sz, sizeof(in_buf));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			ds_f_name, strerror(errno));
@@ -2903,7 +2903,7 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		}
 	}
 
-	out_buf = calloc(32, sizeof(out_buf));
+	out_buf = calloc(32, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -2982,7 +2982,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	size_t input_sz, ud_sz, sig_sz, pk_sz;
 	FILE *fp0, *fp1, *fp2, *fp;
 	struct stat st0, st1, st2;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t sz0, sz1, sz2;
 	int ret = -1;
 	char *ptr[3];
@@ -3050,7 +3050,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 	else
 		input_sz = ud_sz + sig_sz;
 
-	in_buf = calloc(input_sz, sizeof(in_buf));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			ds_f_name, strerror(errno));
@@ -3093,7 +3093,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		}
 	}
 
-	out_buf = calloc(32, sizeof(out_buf));
+	out_buf = calloc(32, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -3169,11 +3169,11 @@ static int fcs_ecdsa_get_public_key(uint32_t sid, uint32_t cid, uint32_t kid,
 		int ecc_algo, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *out_buf;
+	uint8_t *out_buf;
 	int ret = -1;
 	FILE *fp;
 
-	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
@@ -3242,7 +3242,7 @@ static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
 		int ecc_algo, char *in_f_name, char *out_f_name)
 {
 	struct intel_fcs_dev_ioctl *dev_ioctl;
-	char *in_buf, *out_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t input_sz, sz;
 	struct stat st;
 	int ret = -1;
@@ -3265,7 +3265,7 @@ static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	input_sz = st.st_size;
 
-	in_buf = calloc(input_sz, sizeof(in_buf));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name, strerror(errno));
@@ -3282,7 +3282,7 @@ static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(out_buf));
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
