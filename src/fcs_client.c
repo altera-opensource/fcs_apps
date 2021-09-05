@@ -3799,19 +3799,19 @@ int main(int argc, char *argv[])
 	bool verbose = false;
 	int cer_request = 0;
 	int32_t test = -1;
-	uint32_t c_value;
+	uint32_t c_value = 0xFFFFFFFF;
 	uint64_t own = 0;
 	int16_t id = 0;
-	uint8_t c_type;
+	uint8_t c_type = 0;
 	int type = -1;
 	int32_t keyid = 0;
 	char *endptr;
-	int block_mode;
+	int block_mode = -1;
 	int aes_mode;
 	char *iv_field;
 	int context_id;
 	int sha_op_mode;
-	int sha_dig_sz;
+	int sha_dig_sz = 0;
 	int ecc_algo;
 
 	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWXYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
