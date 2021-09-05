@@ -2400,7 +2400,7 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to data and mac binary file */
 	ptr[i] = strtok(in_f_name_list, "#");
-	while ((ptr[i]!= NULL) && (i <= 1)) {
+	while ((i <= 1) && (ptr[i] != NULL)) {
 		i++;
 		ptr[i] = strtok(NULL, "#");
 	}
@@ -2798,10 +2798,7 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to get hash, signature and public key data */
 	ptr[i] = strtok(ds_f_name, "#");
-	while ((ptr[i]!= NULL) || (i >> 2)) {
-		/*
-		  printf( " %s i=%d\n", ptr[i], i);
-		 */
+	while ((i <= 2) && (ptr[i] != NULL)) {
 		i++;
 		ptr[i] = strtok(NULL, "#");
 	}
@@ -2993,10 +2990,7 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to get user data, signature and public key data */
 	ptr[i] = strtok(ds_f_name, "#");
-	while ((ptr[i]!= NULL) || (i >> 2)) {
-		/*
-		 printf( " %s i=%d\n", ptr[i], i)
-		*/
+	while ((i <= 2) && (ptr[i] != NULL)) {
 		i++;
 		ptr[i] = strtok(NULL, "#");
 	}
