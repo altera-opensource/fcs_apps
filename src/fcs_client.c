@@ -2122,8 +2122,8 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 
 		iv_field_buf = calloc(16, sizeof(iv_field_buf));
 		if (!iv_field_buf) {
-			 fprintf(stderr, "can't calloc buffer for iv %s:  %s\n",
-				 iv_field_buf, strerror(errno));
+			 fprintf(stderr, "can't calloc buffer for iv:  %s\n",
+				 strerror(errno));
 			 fclose(fp);
 			 return ret;
 		}
