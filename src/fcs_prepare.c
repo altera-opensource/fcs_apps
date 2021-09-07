@@ -526,6 +526,11 @@ static int fcs_prepare_key(int key_type, int key_id,
 		struct stat st;
 		int hash_sz, filesz;
 
+		if (!filename) {
+			fprintf(stderr, "NULL filename:  %s\n", strerror(errno));
+			return -1;
+		}
+
 		if (verbose)
 			printf("%s[%d] filename=%s\n", __func__, __LINE__, filename);
 
@@ -720,10 +725,6 @@ static int fcs_prepare_generate_cs_key_object(unsigned int key_id, int key_size,
 
 		ret = fcs_cs_key_object_encode(&object, buffer, &buffer_size);
 		if (ret == 0) {
-			struct stat fbuffer;
-			if (stat(key_obj_file, &fbuffer) == 0)
-				remove(key_obj_file);
-
 			fpo = fopen(key_obj_file, "wbx");
 			if (!fpo) {
 				fprintf(stderr, "Unable to open file %s:  %s\n",
