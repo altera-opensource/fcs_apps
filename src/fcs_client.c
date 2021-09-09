@@ -1879,6 +1879,15 @@ static int fcs_import_service_key(uint32_t sid, char *filename)
 	}
 
 	filesize = st.st_size;
+	if (filesize == 0 || filesize % 4) {
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			filesize, filename);
+		free(dev_ioctl);
+		fclose(file);
+		return -1;
+	}
+
 	buffer = calloc(filesize, sizeof(uint8_t));
 	if (!buffer) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
@@ -2114,7 +2123,7 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 		}
 
 		iv_field_sz = st.st_size;
-		if (iv_field_sz > 16) {
+		if (iv_field_sz == 0 || iv_field_sz > 16) {
 			printf("%s[%d] incorrect iv_fileds_size=%ld\n", __func__, __LINE__, iv_field_sz);
 			fclose(fp);
 			return ret;
@@ -2159,10 +2168,11 @@ static int fcs_aes_crypt(uint32_t sid, uint32_t cid, uint32_t kid,
 	}
 
 	input_sz = st.st_size;
-
-	if (input_sz % 32) {
-		fprintf(stderr, "input file %s is not 32 byte aligned: %s\n",
-			in_f_name, strerror(errno));
+	if (input_sz == 0 || input_sz % 32) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 32 byte aligned: %s\n",
+			input_sz, in_f_name);
 		if (bmode > 0)
 			free(iv_field_buf);
 		return ret;
@@ -2293,6 +2303,13 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 	}
 
 	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 8) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
 
 	in_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!in_buf) {
@@ -2422,7 +2439,15 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 			ptr[0], strerror(errno));
 		return ret;
 	}
+
 	input_sz0 = st0.st_size;
+	if (input_sz0 == 0 || input_sz0 % 8) {
+		fclose(fp0);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz0, ptr[0]);
+		return ret;
+	}
 
 	/* get mac input file data */
 	fp1 = fopen(ptr[1], "rbx");
@@ -2440,6 +2465,14 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 	input_sz1 = st1.st_size;
+	if (input_sz1 == 0 || input_sz1 % 4) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz1, ptr[1]);
+		return ret;
+	}
 
 	input_sz = input_sz0 + input_sz1;
 
@@ -2572,6 +2605,13 @@ static int fcs_ecdsa_hash_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 	}
 
 	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 4) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
 
 	in_buf = calloc(input_sz + 1, sizeof(uint8_t));
 	if (!in_buf) {
@@ -2689,6 +2729,13 @@ static int fcs_ecdsa_sha2_data_sign(uint32_t sid, uint32_t cid, uint32_t kid,
 	}
 
 	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 8) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
 
 	in_buf = calloc(input_sz + 1, sizeof(uint8_t));
 	if (!in_buf) {
@@ -2802,6 +2849,11 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		i++;
 		ptr[i] = strtok(NULL, "#");
 	}
+	if (i < 2 || (kid == 0 && i < 3)) {
+		fprintf(stderr, "Missing %s file in -z option\n",
+			"hash or signature or pubkey file");
+		return ret;
+	}
 
 	fp0 = fopen(ptr[0], "rbx");
 	if (!fp0) {
@@ -2816,6 +2868,13 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 	input_sz0 = st0.st_size;
+	if (input_sz0 == 0 || input_sz0 % 4) {
+		fclose(fp0);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz0, ptr[0]);
+		return ret;
+	}
 
 	fp1 = fopen(ptr[1], "rbx");
 	if (!fp1) {
@@ -2832,6 +2891,14 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 	input_sz1 = st1.st_size;
+	if (input_sz1 == 0 || input_sz1 % 4) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz1, ptr[1]);
+		return ret;
+	}
 
 	if (kid == 0) {
 		fp2 = fopen(ptr[2], "rbx");
@@ -2851,6 +2918,15 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 			return ret;
 		}
 		input_sz2 = st2.st_size;
+		if (input_sz2 == 0 || input_sz2 % 4) {
+			fclose(fp0);
+			fclose(fp1);
+			fclose(fp2);
+			fprintf(stderr,
+				"File size (%ld) is empty or not 4 byte aligned: %s\n",
+				input_sz2, ptr[2]);
+			return ret;
+		}
 	}
 
 	if (kid == 0)
@@ -2994,6 +3070,11 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		i++;
 		ptr[i] = strtok(NULL, "#");
 	}
+	if (i < 2 || (kid == 0 && i < 3)) {
+		fprintf(stderr, "Missing %s file in -z option\n",
+			"data or signature or pubkey file");
+		return ret;
+	}
 
 	fp0 = fopen(ptr[0], "rbx");
 	if (!fp0) {
@@ -3008,6 +3089,13 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 	ud_sz = st0.st_size;
+	if (ud_sz == 0 || ud_sz % 8) {
+		fclose(fp0);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			ud_sz, ptr[0]);
+		return ret;
+	}
 
 	fp1 = fopen(ptr[1], "rbx");
 	if (!fp1) {
@@ -3024,6 +3112,14 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 	sig_sz = st1.st_size;
+	if (sig_sz == 0 || sig_sz % 4) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			sig_sz, ptr[1]);
+		return ret;
+	}
 
 	if (kid == 0) {
 		fp2 = fopen(ptr[2], "rbx");
@@ -3043,6 +3139,15 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 			return ret;
 		}
 		pk_sz = st2.st_size;
+		if (pk_sz == 0 || pk_sz % 4) {
+			fclose(fp0);
+			fclose(fp1);
+			fclose(fp2);
+			fprintf(stderr,
+				"File size (%ld) is empty or not 4 byte aligned: %s\n",
+				pk_sz, ptr[2]);
+			return ret;
+		}
 	}
 
 	if (kid == 0)
@@ -3264,6 +3369,13 @@ static int fcs_ecdh_request(uint32_t sid, uint32_t cid, uint32_t kid,
 	}
 
 	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 4) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
 
 	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
