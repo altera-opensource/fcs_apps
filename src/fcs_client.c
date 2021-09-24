@@ -2314,7 +2314,7 @@ static int fcs_sha2_get_digest(uint32_t sid, uint32_t cid, uint32_t kid,
 		return ret;
 	}
 
-	in_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
+	in_buf = calloc(input_sz, sizeof(uint8_t));
 	if (!in_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			in_f_name, strerror(errno));
