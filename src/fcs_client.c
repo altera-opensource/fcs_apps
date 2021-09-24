@@ -2420,9 +2420,12 @@ static int fcs_mac_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to data and mac binary file */
 	ptr[i] = strtok(in_f_name_list, "#");
-	while ((i <= 1) && (ptr[i] != NULL)) {
+	while (ptr[i] != NULL) {
 		i++;
-		ptr[i] = strtok(NULL, "#");
+		if (i <= 1)
+			ptr[i] = strtok(NULL, "#");
+		else
+			break;
 	}
 	if (i != 2) {
 		fprintf(stderr, "Missing data or mac file in -z option\n");
@@ -2848,9 +2851,12 @@ static int fcs_ecdsa_hash_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to get hash, signature and public key data */
 	ptr[i] = strtok(ds_f_name, "#");
-	while ((i <= 2) && (ptr[i] != NULL)) {
+	while (ptr[i] != NULL) {
 		i++;
-		ptr[i] = strtok(NULL, "#");
+		if (i <= 2)
+			ptr[i] = strtok(NULL, "#");
+		else
+			break;
 	}
 	if (i < 2 || (kid == 0 && i < 3)) {
 		fprintf(stderr, "Missing %s file in -z option\n",
@@ -3069,9 +3075,12 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	/* parse to get user data, signature and public key data */
 	ptr[i] = strtok(ds_f_name, "#");
-	while ((i <= 2) && (ptr[i] != NULL)) {
+	while (ptr[i] != NULL) {
 		i++;
-		ptr[i] = strtok(NULL, "#");
+		if (i <= 2)
+			ptr[i] = strtok(NULL, "#");
+		else
+			break;
 	}
 	if (i < 2 || (kid == 0 && i < 3)) {
 		fprintf(stderr, "Missing %s file in -z option\n",
