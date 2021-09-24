@@ -1676,6 +1676,9 @@ int fcs_attestation_certificate_reload(int c_request, bool verbose)
 	ret = dev_ioctl->status;
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
 	return ret;
 }
 
@@ -3161,6 +3164,8 @@ static int fcs_ecdsa_sha2_verify(uint32_t sid, uint32_t cid, uint32_t kid,
 			ds_f_name, strerror(errno));
 		fclose(fp0);
 		fclose(fp1);
+		if (kid == 0)
+			fclose(fp2);
 		return ret;
 	}
 
@@ -3920,7 +3925,7 @@ int main(int argc, char *argv[])
 	char *endptr;
 	int block_mode = -1;
 	int aes_mode;
-	char *iv_field;
+	char *iv_field = NULL;
 	int context_id;
 	int sha_op_mode;
 	int sha_dig_sz = 0;
