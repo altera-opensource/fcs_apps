@@ -1,3 +1,13 @@
+This is the repository for the application source code necessary for FPGA
+crypto service.
+
+This repository includes software from several sources under a collection of
+compatible open source licenses; refer to the specific copyright/license
+embedded in each source file.
+
+fcs_prepare is the command line application which can be run at any host
+machine to generate the specific file required for FPGA crypto service.
+
 Example Usage:
 
 For creating a HPS Image Certificate, you'll need an HPS image because
