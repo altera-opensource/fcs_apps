@@ -99,6 +99,9 @@ static const struct option opts[] = {
 	{"ecdsa_sha2_data_verify", no_argument, NULL, 'W'},
 	{"ecdsa_get_pub_key", no_argument, NULL, 'Z'},
 	{"ecdh_request", no_argument, NULL, 'X'},
+	{"mbox_send_cmd", no_argument, NULL, 1},
+	{"cmd_code", required_argument, NULL, 2},
+	{"urgent", required_argument, NULL, 3},
 	{"help", no_argument, NULL, 'h'},
 	{NULL, 0, NULL, 0}
 };
@@ -173,6 +176,8 @@ static void fcs_client_usage(void)
 	       "\tSend the request to get the public key and save public key data into the output_filename\n\n");
 	printf("%-32s  %s", "-X|--ecdh_request -s <sid> -n <cid> -k <kid> -q <ecc_algorithm> -i <input_filename> -o <output_filename>\n",
 	       "\tSend the request on generating a share secret on Diffie-Hellman key exchange\n\n");
+	printf("%-32s  %s", "-x|--mbox_send_cmd --cmd_code <mbox_id> -i <input_filename> -o <output_filename>\n",
+	       "\tSend generic mailbox command\n\n");
 	printf("%-32s  %s", "-v|--verbose",
 	       "Verbose printout\n\n");
 	printf("%-32s  %s", "-h|--help", "Show usage message\n");
@@ -3904,6 +3909,179 @@ static int fcs_sdos_decrypt_ext(uint32_t sid, uint32_t cid,
 }
 
 /*
+ * fcs_mbox_send_cmd() - send mailbox command
+ * @mbox_cmd_code: command code
+ * @mbox_urgent: 0 for CASUAL, 1 for URGENT
+ * @filename: filename holding mailbox commands
+ * @outfilename: filename holding mailbox responses
+ * @verbose: verbosity of output (true = more output)
+ *
+ * Return: 0 on success, or error on failure
+ */
+static int fcs_mbox_send_cmd(uint32_t mbox_cmd_code, uint8_t mbox_urgent, char *filename, char *outfilename, bool verbose)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	char *in_buf = NULL, *out_buf = NULL;
+	size_t filesize = 0, outfilesize = 0, sz = 0;
+	struct stat st;
+	FILE *fp;
+	int ret = -1;
+
+	if(filename) {
+		/* Open input binary file */
+		fp = fopen(filename, "rbx");
+		if (!fp) {
+			fprintf(stderr, "can't open %s for reading: %s\n",
+				filename, strerror(errno));
+			return ret;
+		}
+
+		/* Get the file stattistics */
+		if (fstat(fileno(fp), &st)) {
+			fclose(fp);
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				filename, strerror(errno));
+			return ret;
+		}
+
+		/* Find the file size */
+		filesize = st.st_size;
+		if ((filesize == 0) || (filesize % 4)) {
+			fprintf(stderr,
+				"File size (%ld) is empty or not 4 byte aligned : %s\n",
+				filesize, filename);
+			fclose(fp);
+			return ret;
+		}
+
+		/* allocate a buffer for the input data */
+		in_buf = calloc(filesize, sizeof(char));
+		if (!in_buf) {
+			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+				filename, strerror(errno));
+			fclose(fp);
+			return ret;
+		}
+
+		sz = fread(in_buf, 1, filesize, fp);
+		fclose(fp);
+		if (sz != filesize) {
+			fprintf(stderr,
+				"Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz, filesize, filename, strerror(errno));
+			memset(in_buf, 0, filesize);
+			free(in_buf);
+			return ret;
+		}
+
+		if (verbose)
+			printf("Allocate input data buffer success\n");
+	} else {
+		/* Set filesize to 0 if no input file*/
+		filesize = 0;
+	}
+
+	if (verbose)
+		printf("%s[%d] filesize=%ld\n", __func__, __LINE__, filesize);
+
+	if(outfilename) {
+		/* allocate a buffer for the output data  */
+		outfilesize = MBOX_SEND_RSP_MAX_SZ;
+		out_buf = calloc(outfilesize, sizeof(char));
+		if (!out_buf) {
+			fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+				outfilename, strerror(errno));
+			if (in_buf) {
+				memset(in_buf, 0, filesize);
+				free(in_buf);
+			}
+			return ret;
+		}
+		if (verbose)
+			printf("Allocate output data buffer success\n");
+	} else {
+		outfilesize = 0;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		if (in_buf) {
+			memset(in_buf, 0, filesize);
+			free(in_buf);
+		}
+		if (out_buf) {
+			memset(out_buf, 0, outfilesize);
+			free(out_buf);
+		}
+		return ret;
+	}
+
+	dev_ioctl->com_paras.mbox_send_cmd.mbox_cmd = mbox_cmd_code;
+	dev_ioctl->com_paras.mbox_send_cmd.urgent = mbox_urgent;
+	dev_ioctl->com_paras.mbox_send_cmd.cmd_data = in_buf;
+	dev_ioctl->com_paras.mbox_send_cmd.cmd_data_sz = filesize;
+	dev_ioctl->com_paras.mbox_send_cmd.rsp_data = out_buf;
+	dev_ioctl->com_paras.mbox_send_cmd.rsp_data_sz = outfilesize;
+	dev_ioctl->status = -1;
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_MBOX_SEND);
+
+	ret = dev_ioctl->status;
+	printf("ioctl return status=%d\n", dev_ioctl->status);
+
+	if (ret) {
+		fprintf(stderr, "Return status error: %d\n", ret);
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		if (in_buf) {
+			memset(in_buf, 0, filesize);
+			free(in_buf);
+		}
+		if (out_buf) {
+			memset(out_buf, 0, outfilesize);
+			free(out_buf);
+		}
+		return ret;
+	}
+
+	/* save output responses to the file */
+	fp = fopen(outfilename, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			outfilename, strerror(errno));
+		if (in_buf) {
+			memset(in_buf, 0, filesize);
+			free(in_buf);
+		}
+		if (out_buf) {
+			memset(out_buf, 0, outfilesize);
+			free(out_buf);
+		}
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		return -1;
+	}
+
+	fwrite(dev_ioctl->com_paras.mbox_send_cmd.rsp_data,
+	       dev_ioctl->com_paras.mbox_send_cmd.rsp_data_sz, 1, fp);
+	fclose(fp);
+
+	if (in_buf) {
+		memset(in_buf, 0, filesize);
+		free(in_buf);
+	}
+	if (out_buf) {
+		memset(out_buf, 0, outfilesize);
+		free(out_buf);
+	}
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	return ret;
+}
+
+/*
  * error_exit()
  * @msg: the message error
  *
@@ -3939,10 +4117,23 @@ int main(int argc, char *argv[])
 	int sha_op_mode;
 	int sha_dig_sz = 0;
 	int ecc_algo;
+	int mbox_cmd_code = -1;
+	uint8_t mbox_urgent = 0;
 
 	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWXYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
 		switch (c) {
+		case 1:
+			if (command != INTEL_FCS_DEV_COMMAND_NONE)
+				error_exit("Only one command allowed");
+			command = INTEL_FCS_DEV_MBOX_SEND_CMD;
+			break;
+		case 2:
+			mbox_cmd_code = atoi(optarg);
+			break;
+		case 3:
+			mbox_urgent = atoi(optarg);
+			break;
 		case 'V':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
@@ -4346,6 +4537,13 @@ int main(int argc, char *argv[])
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
 		ret = fcs_ecdh_request(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
+		break;
+	case INTEL_FCS_DEV_MBOX_SEND_CMD:
+		if (mbox_cmd_code == -1)
+			error_exit("Incorrect command code - Set a command code");
+		if (!outfilename)
+			error_exit("Missing output filename");
+		ret = fcs_mbox_send_cmd((uint32_t)mbox_cmd_code, mbox_urgent, filename, outfilename, verbose);
 		break;
 	case INTEL_FCS_DEV_COMMAND_NONE:
 	default:

@@ -50,6 +50,9 @@
 
 #define RANDOM_NUMBER_EXT_MAX_SZ		4080
 
+#define MBOX_SEND_CMD_MAX_SZ	4092	/* 4K - 4 bytes. 4 bytes reserved for header*/
+#define MBOX_SEND_RSP_MAX_SZ	4092	/* 4K - 4 bytes. 4 bytes reserved for header */
+
 /*
  * struct fcs_hps_generic_header
  * @cert_magic_num: Certificate Magic Word (0x25D04E7F)
