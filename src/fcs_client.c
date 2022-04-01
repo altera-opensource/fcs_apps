@@ -4046,27 +4046,29 @@ static int fcs_mbox_send_cmd(uint32_t mbox_cmd_code, uint8_t mbox_urgent, char *
 		return ret;
 	}
 
-	/* save output responses to the file */
-	fp = fopen(outfilename, "wbx");
-	if (!fp) {
-		fprintf(stderr, "can't open %s for writing: %s\n",
-			outfilename, strerror(errno));
-		if (in_buf) {
-			memset(in_buf, 0, filesize);
-			free(in_buf);
+	if(outfilename) {
+		/* save output responses to the file */
+		fp = fopen(outfilename, "wbx");
+		if (!fp) {
+			fprintf(stderr, "can't open %s for writing: %s\n",
+				outfilename, strerror(errno));
+			if (in_buf) {
+				memset(in_buf, 0, filesize);
+				free(in_buf);
+			}
+			if (out_buf) {
+				memset(out_buf, 0, outfilesize);
+				free(out_buf);
+			}
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			free(dev_ioctl);
+			return -1;
 		}
-		if (out_buf) {
-			memset(out_buf, 0, outfilesize);
-			free(out_buf);
-		}
-		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
-		free(dev_ioctl);
-		return -1;
+		fwrite(dev_ioctl->com_paras.mbox_send_cmd.rsp_data,
+			dev_ioctl->com_paras.mbox_send_cmd.rsp_data_sz, 1, fp);
+		fclose(fp);
 	}
 
-	fwrite(dev_ioctl->com_paras.mbox_send_cmd.rsp_data,
-	       dev_ioctl->com_paras.mbox_send_cmd.rsp_data_sz, 1, fp);
-	fclose(fp);
 
 	if (in_buf) {
 		memset(in_buf, 0, filesize);
