@@ -4095,6 +4095,25 @@ static void error_exit(char *msg)
 	exit(1);
 }
 
+/*
+ * convert_string_to_int() - convert numerical or hexadecimal string to int.
+ * @*str: pointer to string to be converted to int value.
+ *
+ * Return: value in integer
+ */
+static int convert_string_to_int(char *str)
+{
+	int value;
+	char *endptr;
+
+	value = strtol(str, &endptr, 0);
+	if (*endptr) {
+		printf("Arg:%s\n", str);
+		error_exit("Arg is not numeric or hexadecimal character");
+	}
+	return value;
+}
+
 int main(int argc, char *argv[])
 {
 	enum intel_fcs_command_code command = INTEL_FCS_DEV_COMMAND_NONE;
@@ -4131,10 +4150,10 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_MBOX_SEND_CMD;
 			break;
 		case 2:
-			mbox_cmd_code = atoi(optarg);
+			mbox_cmd_code = convert_string_to_int(optarg);
 			break;
 		case 3:
-			mbox_urgent = atoi(optarg);
+			mbox_urgent = convert_string_to_int(optarg);
 			break;
 		case 'V':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4145,7 +4164,7 @@ int main(int argc, char *argv[])
 		case 't':
 			if (type != -1)
 				error_exit("Only one type allowed");
-			type = atoi(optarg);
+			type = convert_string_to_int(optarg);
 			if ((type != INTEL_FCS_IMAGE_HPS) &&
 			    (type > INTEL_FCS_IMAGE_BITSTREAM))
 				error_exit("Invalid type");
@@ -4160,7 +4179,7 @@ int main(int argc, char *argv[])
 			if ((command != INTEL_FCS_DEV_COUNTER_SET_CMD) &&
 			    (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD))
 				error_exit("Only one command allowed");
-			test = atoi(optarg);
+			test = convert_string_to_int(optarg);
 			break;
 		case 'A':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4170,12 +4189,12 @@ int main(int argc, char *argv[])
 		case 'y':
 			if (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD)
 				error_exit("Only one command allowed");
-			c_type = atoi(optarg);
+			c_type = convert_string_to_int(optarg);
 			break;
 		case 'a':
 			if (command != INTEL_FCS_DEV_COUNTER_SET_PREAUTHORIZED_CMD)
 				error_exit("Only one command allowed");
-			c_value = strtol(optarg, NULL, 0);
+			c_value = convert_string_to_int(optarg);
 			break;
 		case 'G':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4200,7 +4219,7 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_PSGSIGMA_TEARDOWN_CMD;
 			break;
 		case 's':
-			sessionid = atoi(optarg);
+			sessionid = convert_string_to_int(optarg);
 			break;
 		case 'I':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4220,13 +4239,13 @@ int main(int argc, char *argv[])
 		case 'F':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
-			cer_request = atoi(optarg);
+			cer_request = convert_string_to_int(optarg);
 			command = INTEL_FCS_DEV_ATTESTATION_GET_CERTIFICATE_CMD;
 			break;
 		case 'L':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Only one command allowed");
-			cer_request = atoi(optarg);
+			cer_request = convert_string_to_int(optarg);
 			command = INTEL_FCS_DEV_ATTESTATION_CERTIFICATE_RELOAD_CMD;
 			break;
 		case 'v':
@@ -4255,14 +4274,14 @@ int main(int argc, char *argv[])
 		case 'd':
 			if (command == INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("ASOI needs command");
-			id = strtoul(optarg, 0, 0);
+			id = convert_string_to_int(optarg);
 			if (errno)
 				error_exit("ASOI conversion error");
 			break;
 		case 'r':
 			if (command == INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("Owner Hash needs command");
-			own = strtoull(optarg, &endptr, 16);
+			own = strtoull(optarg, &endptr, 0);
 			if (*endptr)
 				error_exit("Owner ID conversion error");
 			break;
@@ -4293,7 +4312,7 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_CRYPTO_EXPORT_KEY_CMD;
 			break;
 		case 'k':
-			keyid = atoi(optarg);
+			keyid = convert_string_to_int(optarg);
 			break;
 		case 'J':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4311,16 +4330,16 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD;
 			break;
 		case 'b':
-			block_mode = atoi(optarg);
+			block_mode = convert_string_to_int(optarg);
 			break;
 		case 'n':
-			context_id = atoi(optarg);
+			context_id = convert_string_to_int(optarg);
 			break;
 		case 'f':
 			iv_field = optarg;
 			break;
 		case 'm':
-			aes_mode = atoi(optarg);
+			aes_mode = convert_string_to_int(optarg);
 			if ((aes_mode != 0) && (aes_mode !=1))
 				error_exit("Invalid aes_mode, must be 0 or 1\n");
 			break;
@@ -4330,10 +4349,10 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD;
 			break;
 		case 'g':
-			sha_op_mode = atoi(optarg);
+			sha_op_mode = convert_string_to_int(optarg);
 			break;
 		case 'j':
-			sha_dig_sz = atoi(optarg);
+			sha_dig_sz = convert_string_to_int(optarg);
 			break;
 		case 'O':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
@@ -4349,7 +4368,7 @@ int main(int argc, char *argv[])
 			command = INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD;
 			break;
 		case 'q':
-			ecc_algo = atoi(optarg);
+			ecc_algo = convert_string_to_int(optarg);
 			break;
 		case 'Q':
 			if (command != INTEL_FCS_DEV_COMMAND_NONE)
