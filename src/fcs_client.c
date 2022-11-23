@@ -41,6 +41,14 @@
 #define SDOS_MAGIC_WORD		0xACBDBDED
 #define SDOS_HEADER_PADDING	0x01020304
 
+#define AES_MAX_SIZE		0xE600000	/* set 230 Mb */
+#define HMAC_MAX_SIZE		0x1D600000	/* set 470 Mb */
+#define ECDSA_MAX_SIZE		0x1D600000	/* set 470 Mb */
+#define SZ_2M				0x200000	
+
+/*SDM required minimun 8 bytes of data for crypto service*/
+#define CRYPTO_SERVICE_MIN_DATA_SIZE	8
+
 const char *dev = "/dev/fcs";
 
 /*
@@ -313,6 +321,71 @@ static int verify_hash(struct fcs_hps_vab_certificate_header *pcert,
 		return -1;
 	}
 	return 0;
+}
+
+static bool fcs_check_smmu_enabled(void)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	bool enabled = false;
+	int ret;
+	int fd;
+	void * t_buf;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+	perror("open");
+	exit(-1);
+	}
+
+	t_buf = mmap(0, (SZ_2M), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (t_buf == MAP_FAILED)	
+	{
+		enabled = false;
+		ret = close(fd);
+		if(ret != 0)
+		{
+			fprintf(stderr,"file descriptor close failed: %x\n",ret);
+		}
+		return enabled;
+	}
+	else
+	{
+		enabled = true;
+		munmap(t_buf,SZ_2M);
+	}
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		return false;
+	}
+
+	if(dev_ioctl->status != 0)
+	{
+		enabled = false;
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+
+		return enabled;
+	}
+
+	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CHECK_SMMU_ENABLED);
+
+	if(dev_ioctl->status != 0)
+	{
+		enabled = false;
+	}
+	
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+
+	return enabled;
 }
 
 /*
@@ -4083,6 +4156,1093 @@ static int fcs_mbox_send_cmd(uint32_t mbox_cmd_code, uint8_t mbox_urgent, char *
 	return ret;
 }
 
+static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
+			 int bmode, int aes_mode, char *iv_field,
+			 char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	uint8_t *in_buf, *out_buf, *iv_field_buf, *cached_out_buf;
+	size_t iv_field_sz, input_sz, sz, alloc_sz, size;
+	int calc, pad = 0;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+	FILE *fp_out;
+	int fd;
+	int offset = 0;
+	int read_sz = 0;
+	size_t remaining = 0;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+		perror("open");
+		exit(-1);
+	}
+
+	/* get iv_field data */
+	if (bmode > 0) {
+		if (!iv_field) {
+			fprintf(stderr, "NULL iv_field:  %s\n", strerror(errno));
+			return -1;
+		}
+
+		fp = fopen(iv_field, "rbx");
+		if (!fp) {
+			fprintf(stderr, "can't open iv file %s for reading: %s\n",
+				iv_field, strerror(errno));
+			return ret;
+		}
+
+		if (fstat(fileno(fp), &st)) {
+			fclose(fp);
+			fprintf(stderr, "Unable to open iv file %s:  %s\n",
+				iv_field, strerror(errno));
+			return ret;
+		}
+
+		iv_field_sz = st.st_size;
+		if (iv_field_sz == 0 || iv_field_sz > 16) {
+			printf("%s[%d] incorrect iv_fileds_size=%ld\n", __func__, __LINE__, iv_field_sz);
+			fclose(fp);
+			return ret;
+		}
+
+		iv_field_buf = calloc(16, sizeof(uint8_t));
+		if (!iv_field_buf) {
+			 fprintf(stderr, "can't calloc buffer for iv:  %s\n",
+				 strerror(errno));
+			 fclose(fp);
+			 return ret;
+		}
+
+		sz = fread(iv_field_buf, 1, iv_field_sz, fp);
+		fclose(fp);
+
+		if (sz != iv_field_sz) {
+			fprintf(stderr, "Size mismatch reading data into iv buffer [%ld/%ld] %s:  %s\n",
+				sz, iv_field_sz, iv_field_buf, strerror(errno));
+			free(iv_field_buf);
+			return ret;
+		}
+	}
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	fp_out = fopen(out_f_name, "ab");
+	if (!fp) {
+		fprintf(stderr, "can't open input %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open input file %s:  %s\n",
+			in_f_name, strerror(errno));
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 32) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 32 byte aligned: %s\n",
+			input_sz, in_f_name);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	/* padding 32 bytes align */
+	calc = input_sz % 32;
+	if (calc)
+		pad = 32 - calc;
+	input_sz = input_sz + pad;
+
+	if(input_sz < SZ_2M)
+	{
+		size = SZ_2M;
+		read_sz = input_sz;
+		offset = 1;
+	}
+	else
+	{
+		if(input_sz > AES_MAX_SIZE)
+		{
+			size = AES_MAX_SIZE;
+			read_sz = AES_MAX_SIZE;
+			offset = AES_MAX_SIZE / SZ_2M;
+		}
+		else
+		{
+			calc = input_sz % SZ_2M;
+			offset = input_sz / SZ_2M;
+			if(calc)
+			{
+				pad = SZ_2M - calc;
+				offset +=1;
+			}
+			size = input_sz + pad;
+			read_sz = input_sz;
+		}
+	}
+	alloc_sz = size *2;
+
+	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (in_buf == MAP_FAILED)	{
+		perror("mmap");
+		exit(-1);
+	}
+
+	remaining = input_sz;
+	out_buf = in_buf + (offset*SZ_2M);
+	cached_out_buf = calloc(size, sizeof(uint8_t));
+	if (!cached_out_buf) {
+		fprintf(stderr, "can't calloc buffer for output %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(cached_out_buf);
+		munmap(in_buf, alloc_sz);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.a_crypt.cpara.bmode = bmode;
+	dev_ioctl->com_paras.a_crypt.cpara.aes_mode = aes_mode;
+	if (bmode > 0)
+		memcpy(dev_ioctl->com_paras.a_crypt.cpara.iv_field, iv_field_buf, 16);
+	dev_ioctl->com_paras.a_crypt.sid = sid;
+	dev_ioctl->com_paras.a_crypt.cid = cid;
+	dev_ioctl->com_paras.a_crypt.kuid = kid;
+	dev_ioctl->com_paras.a_crypt.src = in_buf;
+	dev_ioctl->com_paras.a_crypt.dst = out_buf;
+	dev_ioctl->com_paras.a_crypt.dst_size = read_sz;
+	if (bmode == 0)
+		dev_ioctl->com_paras.a_crypt.cpara_size = 12;
+	else
+		dev_ioctl->com_paras.a_crypt.cpara_size = 28;
+	dev_ioctl->com_paras.a_crypt.init = true;
+	dev_ioctl->com_paras.a_crypt.buffer_offset = offset;
+
+	while (remaining > 0) 
+	{
+		if(remaining < read_sz)
+		{
+			read_sz = remaining;
+		}
+		sz = fread(in_buf, 1,read_sz, fp);
+
+		dev_ioctl->com_paras.a_crypt.src_size = remaining;
+		fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_AES_CRYPT_SMMU);
+		dev_ioctl->com_paras.a_crypt.init = false;
+
+		ret = dev_ioctl->status;
+		if(dev_ioctl->status != 0x0)
+		{
+			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+		}
+
+		memcpy(cached_out_buf,out_buf,read_sz);
+		if (!ret) {
+			/* save result into output file */
+			
+			if (!fp_out) {
+				fprintf(stderr, "can't open %s for writing: %s\n",
+					out_f_name, strerror(errno));
+				ret = -1;
+			} else {
+				fwrite(cached_out_buf,read_sz,1,fp_out );
+				
+			}
+
+		}
+		remaining -= read_sz;
+	}
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	fclose(fp);
+	fclose(fp_out);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	if (bmode > 0)
+		memset(iv_field_buf, 0, 16);
+	free(dev_ioctl);
+
+	ret = munmap(in_buf, alloc_sz);
+	if(ret != 0)
+	{
+		fprintf(stderr,"munmap failed: %x\n",ret);
+	}
+
+	if (bmode > 0)
+		free(iv_field_buf);
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	free(cached_out_buf);
+	return ret;
+}
+
+static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
+		int op_mode, int dig_sz, char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	uint8_t *in_buf, *out_buf;
+	size_t input_sz, sz, alloc_sz, remaining_sz, read_sz;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+	int fd;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+	perror("open");
+	exit(-1);
+	}
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 8) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
+
+	if(input_sz > HMAC_MAX_SIZE)
+	{
+		alloc_sz = HMAC_MAX_SIZE;
+		read_sz = HMAC_MAX_SIZE;
+	}
+	else
+	{
+		alloc_sz = input_sz;
+		read_sz = input_sz;
+	}
+
+	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (in_buf == MAP_FAILED)	{
+		perror("mmap");
+		exit(-1);
+	}
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		free(in_buf);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		free(in_buf);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.s_mac_data.sha_op_mode = op_mode;
+	dev_ioctl->com_paras.s_mac_data.sha_digest_sz = dig_sz;
+	dev_ioctl->com_paras.s_mac_data.sid = sid;
+	dev_ioctl->com_paras.s_mac_data.cid = cid;
+	dev_ioctl->com_paras.s_mac_data.kuid = kid;
+	dev_ioctl->com_paras.s_mac_data.src = in_buf;
+	dev_ioctl->com_paras.s_mac_data.dst = out_buf;
+	dev_ioctl->com_paras.s_mac_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.s_mac_data.init = true;
+	dev_ioctl->com_paras.s_mac_data.userdata_sz = input_sz;
+
+	remaining_sz = input_sz;
+
+	while(remaining_sz > 0)
+	{
+		if(read_sz > remaining_sz)
+		{
+			read_sz = remaining_sz;
+		}
+
+		sz = fread(in_buf, 1, read_sz, fp);
+		if (sz != read_sz) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz, read_sz, in_f_name, strerror(errno));
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+		dev_ioctl->com_paras.a_crypt.src_size = remaining_sz;
+
+		fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_GET_DIGEST_SMMU);
+		dev_ioctl->com_paras.s_mac_data.init = false;
+
+		ret = dev_ioctl->status;
+
+		if (ret) {
+			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+			free(dev_ioctl);
+			free(out_buf);
+			munmap(in_buf, alloc_sz);
+			return ret;
+		}
+
+		remaining_sz -= read_sz;
+	}
+
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+
+	fclose(fp);
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+                memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+                free(dev_ioctl);
+                free(out_buf);
+                munmap(in_buf, alloc_sz);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.s_mac_data.dst,
+	       dev_ioctl->com_paras.s_mac_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+
+	ret = munmap(in_buf, alloc_sz);
+	if(ret != 0)
+	{
+		fprintf(stderr,"munmap failed: %x\n",ret);
+	}
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	return ret;
+}
+
+static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
+                int dig_sz, char *in_f_name_list, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	uint8_t *in_buf, *out_buf;
+	FILE *fp0, *fp1, *fp;
+	struct stat st0, st1;
+	size_t input_sz0, sz0, read_sz0;
+	size_t input_sz1, sz1, read_sz1;
+	size_t input_sz;
+	size_t alloc_sz,remaining_sz;
+	size_t out_sz = 32;
+	int ret = -1;
+	char *ptr[2];
+	int i = 0;
+	int fd;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+	perror("open");
+	exit(-1);
+	}
+
+	/* parse to data and mac binary file */
+	ptr[i] = strtok(in_f_name_list, "#");
+	while (ptr[i] != NULL) {
+		i++;
+		if (i <= 1)
+			ptr[i] = strtok(NULL, "#");
+		else
+			break;
+	}
+	if (i != 2) {
+		fprintf(stderr, "Missing data or mac file in -z option\n");
+		return ret;
+	}
+
+	/* get data input file data */
+	fp0 = fopen(ptr[0], "rbx");
+	if (!fp0) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp0), &st0)) {
+		fclose(fp0);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+
+	input_sz0 = st0.st_size;
+	if (input_sz0 == 0 || input_sz0 % 8) {
+		fclose(fp0);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz0, ptr[0]);
+		return ret;
+	}
+
+	/* get mac input file data */
+	fp1 = fopen(ptr[1], "rbx");
+	if (!fp1) {
+		fclose(fp0);
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp1), &st1)) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	input_sz1 = st1.st_size;
+	if (input_sz1 == 0 || input_sz1 % 4) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			input_sz1, ptr[1]);
+		return ret;
+	}
+
+	input_sz = input_sz0 + input_sz1;
+
+	if(input_sz > HMAC_MAX_SIZE)
+	{
+		alloc_sz = HMAC_MAX_SIZE;
+	}
+	else
+	{
+		alloc_sz = input_sz;
+	}
+
+	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (in_buf == MAP_FAILED)	{
+		perror("mmap");
+		exit(-1);
+	}
+
+	out_buf = calloc(out_sz, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		munmap(in_buf,input_sz);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		munmap(in_buf,input_sz);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.s_mac_data.sha_op_mode = 0;
+	dev_ioctl->com_paras.s_mac_data.sha_digest_sz = dig_sz;
+	dev_ioctl->com_paras.s_mac_data.sid = sid;
+	dev_ioctl->com_paras.s_mac_data.cid = cid;
+	dev_ioctl->com_paras.s_mac_data.kuid = kid;
+	dev_ioctl->com_paras.s_mac_data.src = in_buf;
+	dev_ioctl->com_paras.s_mac_data.dst = out_buf;
+	dev_ioctl->com_paras.s_mac_data.dst_size = out_sz;
+	dev_ioctl->com_paras.s_mac_data.init = true;
+
+	remaining_sz = input_sz;
+
+	while(remaining_sz > 0)
+	{
+		if(remaining_sz > HMAC_MAX_SIZE)
+		{
+			if(remaining_sz-HMAC_MAX_SIZE>=(CRYPTO_SERVICE_MIN_DATA_SIZE+input_sz1))
+			{
+				read_sz0 = HMAC_MAX_SIZE;
+				read_sz1 = 0;
+				dev_ioctl->com_paras.s_mac_data.userdata_sz = HMAC_MAX_SIZE;
+			}
+			else
+			{
+				read_sz0 = (remaining_sz - CRYPTO_SERVICE_MIN_DATA_SIZE 
+							- input_sz1);
+				read_sz1 = 0;
+				dev_ioctl->com_paras.s_mac_data.userdata_sz = (remaining_sz 
+							- CRYPTO_SERVICE_MIN_DATA_SIZE - input_sz1);
+			}
+		}
+		else
+		{
+			read_sz0 = remaining_sz - input_sz1;
+			read_sz1 = input_sz1;
+
+			dev_ioctl->com_paras.s_mac_data.userdata_sz = remaining_sz - input_sz1;
+		}
+
+		dev_ioctl->com_paras.s_mac_data.src_size = remaining_sz;
+
+		sz0 = fread(in_buf, 1, read_sz0, fp0);
+		if (sz0 != read_sz0) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz0, input_sz0, ptr[0], strerror(errno));
+			fclose(fp1);
+			munmap(in_buf,input_sz);
+			return ret;
+		}
+
+		sz1 = fread(in_buf + sz0, 1, read_sz1, fp1);
+		if (sz1 != read_sz1) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz1, input_sz1, ptr[1], strerror(errno));
+			munmap(in_buf,input_sz);
+			return ret;
+		}
+		
+		fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_SMMU);
+		dev_ioctl->com_paras.s_mac_data.init = false;
+		ret = dev_ioctl->status;
+
+
+		if (ret) {
+			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			memset(out_buf, 0, out_sz);
+			free(dev_ioctl);
+			free(out_buf);
+			munmap(in_buf,input_sz);
+			return ret;
+		}
+
+		remaining_sz = remaining_sz - read_sz0 - read_sz1;
+	}
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	fclose(fp0);
+	fclose(fp1);
+
+
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, out_sz);
+		free(dev_ioctl);
+		free(out_buf);
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.s_mac_data.dst,
+	       dev_ioctl->com_paras.s_mac_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, out_sz);
+	free(out_buf);
+	munmap(in_buf,alloc_sz);
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	return ret;
+}
+
+/**
+ *
+ */
+static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *in_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	uint8_t *in_buf, *out_buf;
+	size_t input_sz, sz, alloc_sz, read_sz, remaining_sz;
+	struct stat st;
+	int ret = -1;
+	FILE *fp;
+
+	int fd;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+	perror("open");
+	exit(-1);
+	}
+
+	/* get input file data */
+	fp = fopen(in_f_name, "rbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	if (fstat(fileno(fp), &st)) {
+		fclose(fp);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			in_f_name, strerror(errno));
+		return ret;
+	}
+
+	input_sz = st.st_size;
+	if (input_sz == 0 || input_sz % 8) {
+		fclose(fp);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			input_sz, in_f_name);
+		return ret;
+	}
+
+	if(input_sz > ECDSA_MAX_SIZE)
+	{
+		alloc_sz = ECDSA_MAX_SIZE;
+		read_sz = ECDSA_MAX_SIZE;
+	}
+	else
+	{
+		alloc_sz = input_sz;
+		read_sz = input_sz;
+	}
+
+	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (in_buf == MAP_FAILED)	{
+		perror("mmap");
+		exit(-1);
+	}
+
+	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		munmap(in_buf,input_sz);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	/* Fill in the dev_ioctl structure */
+	dev_ioctl->com_paras.ecdsa_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_data.src = in_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_data.dst_size = AES_CRYPT_CMD_MAX_SZ;
+	dev_ioctl->com_paras.ecdsa_data.ecc_algorithm = ecc_algo;
+	dev_ioctl->com_paras.ecdsa_data.init = true;
+	remaining_sz = input_sz;
+
+	while(remaining_sz > 0)
+	{
+		if(read_sz > remaining_sz)
+		{
+			read_sz = remaining_sz;
+		}
+
+		sz = fread(in_buf, 1, read_sz, fp);
+		if (sz != read_sz) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz, read_sz, in_f_name, strerror(errno));
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+		dev_ioctl->com_paras.a_crypt.src_size = remaining_sz;
+
+		fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_SMMU);
+		dev_ioctl->com_paras.ecdsa_data.init = false;
+		ret = dev_ioctl->status;
+
+		if (ret) {
+			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+			free(dev_ioctl);
+			free(out_buf);
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+
+		remaining_sz -= read_sz;
+	}
+	fclose(fp);
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		free(dev_ioctl);
+		free(out_buf);
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
+	free(out_buf);
+	munmap(in_buf,alloc_sz);
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	return ret;
+}
+
+/**
+ *
+ */
+static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
+		int ecc_algo, char *ds_f_name, char *out_f_name)
+{
+	struct intel_fcs_dev_ioctl *dev_ioctl;
+	size_t input_sz, ud_sz, sig_sz, pk_sz, total_sig_sz;
+	FILE *fp0, *fp1, *fp2, *fp;
+	struct stat st0, st1, st2;
+	uint8_t *in_buf, *out_buf, *t_buf;
+	size_t sz0, sz1, sz2;
+	size_t remaining_sz, alloc_sz, read_sz0 = 0, read_sz1 = 0, read_sz2 = 0;
+	int ret = -1;
+	char *ptr[3];
+	int i = 0;
+
+	int fd;
+
+	if ((fd=open("/dev/fcs", O_RDWR|O_SYNC)) < 0) {
+	perror("open");
+	exit(-1);
+	}
+
+	/* parse to get user data, signature and public key data */
+	ptr[i] = strtok(ds_f_name, "#");
+	while (ptr[i] != NULL) {
+		i++;
+		if (i <= 2)
+			ptr[i] = strtok(NULL, "#");
+		else
+			break;
+	}
+	if (i < 2 || (kid == 0 && i < 3)) {
+		fprintf(stderr, "Missing %s file in -z option\n",
+			"data or signature or pubkey file");
+		return ret;
+	}
+
+	fp0 = fopen(ptr[0], "rbx");
+	if (!fp0) {
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp0), &st0)) {
+		fclose(fp0);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[0], strerror(errno));
+		return ret;
+	}
+	ud_sz = st0.st_size;
+	if (ud_sz == 0 || ud_sz % 8) {
+		fclose(fp0);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 8 byte aligned: %s\n",
+			ud_sz, ptr[0]);
+		return ret;
+	}
+
+	fp1 = fopen(ptr[1], "rbx");
+	if (!fp1) {
+		fclose(fp0);
+		fprintf(stderr, "can't open %s for reading: %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	if (fstat(fileno(fp1), &st1)) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr, "Unable to open file %s:  %s\n",
+			ptr[1], strerror(errno));
+		return ret;
+	}
+	sig_sz = st1.st_size;
+	if (sig_sz == 0 || sig_sz % 4) {
+		fclose(fp0);
+		fclose(fp1);
+		fprintf(stderr,
+			"File size (%ld) is empty or not 4 byte aligned: %s\n",
+			sig_sz, ptr[1]);
+		return ret;
+	}
+
+	if (kid == 0) {
+		fp2 = fopen(ptr[2], "rbx");
+		if (!fp2) {
+			fclose(fp0);
+			fclose(fp1);
+			fprintf(stderr, "can't open %s for reading: %s\n",
+				ptr[2], strerror(errno));
+			return ret;
+		}
+		if (fstat(fileno(fp2), &st2)) {
+			fclose(fp0);
+			fclose(fp1);
+			fclose(fp2);
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				ptr[2], strerror(errno));
+			return ret;
+		}
+		pk_sz = st2.st_size;
+		if (pk_sz == 0 || pk_sz % 4) {
+			fclose(fp0);
+			fclose(fp1);
+			fclose(fp2);
+			fprintf(stderr,
+				"File size (%ld) is empty or not 4 byte aligned: %s\n",
+				pk_sz, ptr[2]);
+			return ret;
+		}
+	}
+
+	if (kid == 0)
+	{
+		input_sz = ud_sz + sig_sz + pk_sz;
+		total_sig_sz = sig_sz + pk_sz;
+	}
+	else
+	{
+		input_sz = ud_sz + sig_sz;
+		total_sig_sz = sig_sz;
+	}
+
+	if(input_sz > ECDSA_MAX_SIZE)
+	{
+		alloc_sz = ECDSA_MAX_SIZE;
+	}
+	else
+	{
+		alloc_sz = input_sz;
+	}
+
+	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
+	if (in_buf == MAP_FAILED)	{
+		perror("mmap");
+		exit(-1);
+	}
+
+	out_buf = calloc(32, sizeof(uint8_t));
+	if (!out_buf) {
+		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
+			out_f_name, strerror(errno));
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	dev_ioctl = (struct intel_fcs_dev_ioctl *)
+			malloc(sizeof(struct intel_fcs_dev_ioctl));
+	if (!dev_ioctl) {
+		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		free(out_buf);
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	dev_ioctl->com_paras.ecdsa_sha2_data.sid = sid;
+	dev_ioctl->com_paras.ecdsa_sha2_data.cid = cid;
+	dev_ioctl->com_paras.ecdsa_sha2_data.kuid = kid;
+	dev_ioctl->com_paras.ecdsa_sha2_data.src = in_buf;
+	dev_ioctl->com_paras.ecdsa_sha2_data.src_size = input_sz;
+	dev_ioctl->com_paras.ecdsa_sha2_data.dst = out_buf;
+	dev_ioctl->com_paras.ecdsa_sha2_data.dst_size = 32;
+	dev_ioctl->com_paras.ecdsa_sha2_data.ecc_algorithm = ecc_algo;
+	dev_ioctl->com_paras.ecdsa_sha2_data.init = true;
+
+	remaining_sz = input_sz;
+
+	while(remaining_sz > 0)
+	{
+		if(remaining_sz > ECDSA_MAX_SIZE)
+		{
+			if(remaining_sz-ECDSA_MAX_SIZE>=(CRYPTO_SERVICE_MIN_DATA_SIZE+total_sig_sz))
+			{
+				read_sz0 = ECDSA_MAX_SIZE;
+				read_sz1 = 0;
+				dev_ioctl->com_paras.ecdsa_sha2_data.userdata_sz = ECDSA_MAX_SIZE;
+			}
+			else
+			{
+				read_sz0 = (remaining_sz - CRYPTO_SERVICE_MIN_DATA_SIZE 
+							- total_sig_sz);
+				read_sz1 = 0;
+				dev_ioctl->com_paras.ecdsa_sha2_data.userdata_sz = (remaining_sz 
+							- CRYPTO_SERVICE_MIN_DATA_SIZE - total_sig_sz);
+			}
+		}
+		else
+		{
+			read_sz0 = remaining_sz - total_sig_sz;
+			read_sz1 = sig_sz;
+			if(kid == 0)
+			{
+				read_sz2 = pk_sz;
+			}
+			dev_ioctl->com_paras.ecdsa_sha2_data.userdata_sz = remaining_sz - total_sig_sz;
+			
+		}
+
+
+		dev_ioctl->com_paras.ecdsa_sha2_data.src_size = remaining_sz;
+		sz0 = fread(in_buf, 1, read_sz0, fp0);
+		if (sz0 != read_sz0) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz0, read_sz0, ptr[0], strerror(errno));
+			fclose(fp1);
+			if (kid == 0)
+				fclose(fp2);
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+
+		sz1 = fread(in_buf + sz0, 1, read_sz1, fp1);
+		if (sz1 != read_sz1) {
+			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+				sz1, read_sz1, ptr[1], strerror(errno));
+			fclose(fp0);
+			if (kid == 0)
+				fclose(fp2);
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+
+		if (kid == 0) {
+			sz2 = fread(in_buf + sz0 + sz1, 1, read_sz2, fp2);
+			if (sz2 != read_sz2) {
+				fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
+					sz2, read_sz2, ptr[2], strerror(errno));
+				munmap(in_buf,alloc_sz);
+				return ret;
+			}
+		}
+
+		fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_SMMU);
+		dev_ioctl->com_paras.ecdsa_sha2_data.init = false;
+		ret = dev_ioctl->status;
+
+		if (ret) {
+			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+			memset(out_buf, 0, 32);
+			free(dev_ioctl);
+			free(out_buf);
+			munmap(in_buf,alloc_sz);
+			return ret;
+		}
+
+		remaining_sz = remaining_sz - read_sz0 - read_sz1 - read_sz2;
+	}
+
+	fclose(fp0);
+	fclose(fp1);
+	if(kid == 0)
+	{
+		fclose(fp2);
+	}
+	printf("ioctl return status=0x%x\n", dev_ioctl->status);
+	
+
+	/* save result into output file */
+	fp = fopen(out_f_name, "wbx");
+	if (!fp) {
+		fprintf(stderr, "can't open %s for writing: %s\n",
+			out_f_name, strerror(errno));
+		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+		memset(out_buf, 0, 32);
+		free(dev_ioctl);
+		free(out_buf);
+		munmap(in_buf,alloc_sz);
+		return ret;
+	}
+
+	fwrite(dev_ioctl->com_paras.ecdsa_data.dst,
+	       dev_ioctl->com_paras.ecdsa_data.dst_size, 1, fp);
+	fclose(fp);
+
+	memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
+	free(dev_ioctl);
+	memset(out_buf, 0, 32);
+	free(out_buf);
+	munmap(in_buf,alloc_sz);
+
+	ret = close(fd);
+	if(ret != 0)
+	{
+		fprintf(stderr,"file descriptor close failed: %x\n",ret);
+	}
+
+	return ret;
+}
+
 /*
  * error_exit()
  * @msg: the message error
@@ -4140,6 +5300,9 @@ int main(int argc, char *argv[])
 	int ecc_algo;
 	int mbox_cmd_code = -1;
 	uint8_t mbox_urgent = 0;
+	bool smmu_enabled = false;
+
+	smmu_enabled = fcs_check_smmu_enabled();
 
 	while ((c = getopt_long(argc, argv, "ephlvABEDHJKTISMNOPQUWXYZR:t:V:C:G:F:L:y:a:b:f:s:i:d:m:n:o:q:r:c:k:w:g:j:z:",
 				opts, &index)) != -1) {
@@ -4517,17 +5680,38 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_CRYPTO_AES_CRYPT_CMD:
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
-		ret = fcs_aes_crypt(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
+		if(smmu_enabled == false)
+		{
+			ret = fcs_aes_crypt(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
+		}
+		else
+		{
+			ret = fcs_aes_crypt_smmu(sessionid, context_id, keyid, block_mode, aes_mode, iv_field, filename, outfilename);
+		}
 		break;
 	case INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD:
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
-		ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
+		if(smmu_enabled == false)
+		{
+			ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
+		}
+		else
+		{
+			ret = fcs_sha2_get_digest_smmu(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
+		}
 		break;
 	case INTEL_FCS_DEV_CRYPTO_MAC_VERIFY_CMD:
 		if (!filename_list || !outfilename)
 			error_exit("Missing input file list or output filename");
-		ret = fcs_mac_verify(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
+		if(smmu_enabled == false)
+		{
+			ret = fcs_mac_verify(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
+		}
+		else
+		{
+			ret = fcs_mac_verify_smmu(sessionid, context_id, keyid, sha_dig_sz, filename_list, outfilename);
+		}
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_SIGNING_CMD:
 		if (!filename || !outfilename)
@@ -4536,8 +5720,15 @@ int main(int argc, char *argv[])
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_SIGNING_CMD:
 		if (!filename || !outfilename)
-			error_exit("Missing input or output filename");
-		ret = fcs_ecdsa_sha2_data_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
+			error_exit("Missing input or output filename");\
+		if(smmu_enabled == false)
+		{
+			ret = fcs_ecdsa_sha2_data_sign(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
+		}
+		else
+		{
+			ret = fcs_ecdsa_sha2_data_sign_smmu(sessionid, context_id, keyid, ecc_algo, filename, outfilename);
+		}
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_HASH_VERIFY_CMD:
 		if (!filename_list || !outfilename)
@@ -4547,7 +5738,14 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_SHA2_DATA_VERIFY_CMD:
 		if (!filename_list || !outfilename)
 			error_exit("Missing input file list or output filename");
-		ret = fcs_ecdsa_sha2_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
+		if(smmu_enabled == false)
+		{
+			ret = fcs_ecdsa_sha2_verify(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
+		}
+		else
+		{
+			ret = fcs_ecdsa_sha2_verify_smmu(sessionid, context_id, keyid, ecc_algo, filename_list, outfilename);
+		}
 		break;
 	case INTEL_FCS_DEV_CRYPTO_ECDSA_GET_PUBLIC_KEY_CMD:
 		if (!outfilename)
@@ -4572,8 +5770,6 @@ int main(int argc, char *argv[])
 		fcs_client_usage();
 		break;
 	}
-
-	sleep(1);
 
 	return ret;
 }
