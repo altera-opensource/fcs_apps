@@ -5301,6 +5301,8 @@ int main(int argc, char *argv[])
 	int mbox_cmd_code = -1;
 	uint8_t mbox_urgent = 0;
 	bool smmu_enabled = false;
+	FILE *fp;
+	struct stat st;
 
 	smmu_enabled = fcs_check_smmu_enabled();
 
@@ -5692,7 +5694,27 @@ int main(int argc, char *argv[])
 	case INTEL_FCS_DEV_CRYPTO_GET_DIGEST_CMD:
 		if (!filename || !outfilename)
 			error_exit("Missing input or output filename");
-		if(smmu_enabled == false)
+
+		fp = fopen(filename, "rbx");
+		if (!fp) {
+			fprintf(stderr, "can't open %s for reading: %s\n",
+				filename, strerror(errno));
+			return ret;
+		}
+
+		if (fstat(fileno(fp), &st)) {
+			fclose(fp);
+			fprintf(stderr, "Unable to open file %s:  %s\n",
+				filename, strerror(errno));
+			return ret;
+		}
+
+		fclose(fp);
+		/*TO-DO This workaround is to address HSD#22016270404.For SHA-2 Get Digest (sha_op_mode ==1) with 8-byte file will have 
+			to use Non SMMU implementation due to SDM returning mbox error 0x82 when the SDM Context Bank is enabled. So for 
+			SHA-2 get digest operations with file size 8bytes it will use the non SMMU implementation to prevent the error 
+			until the proper root cause can be identified and fixed*/
+		if(smmu_enabled == false || (sha_op_mode == 1 && st.st_size == 8))
 		{
 			ret = fcs_sha2_get_digest(sessionid, context_id, keyid, sha_op_mode, sha_dig_sz, filename, outfilename);
 		}
