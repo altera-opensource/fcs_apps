@@ -366,15 +366,6 @@ static bool fcs_check_smmu_enabled(void)
 		return false;
 	}
 
-	if(dev_ioctl->status != 0)
-	{
-		enabled = false;
-		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
-		free(dev_ioctl);
-
-		return enabled;
-	}
-
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_CHECK_SMMU_ENABLED);
 
 	if(dev_ioctl->status != 0)
@@ -4181,12 +4172,14 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	/* get iv_field data */
 	if (bmode > 0) {
 		if (!iv_field) {
+			close(fd);
 			fprintf(stderr, "NULL iv_field:  %s\n", strerror(errno));
 			return -1;
 		}
 
 		fp = fopen(iv_field, "rbx");
 		if (!fp) {
+			close(fd);
 			fprintf(stderr, "can't open iv file %s for reading: %s\n",
 				iv_field, strerror(errno));
 			return ret;
@@ -4194,6 +4187,7 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 		if (fstat(fileno(fp), &st)) {
 			fclose(fp);
+			close(fd);
 			fprintf(stderr, "Unable to open iv file %s:  %s\n",
 				iv_field, strerror(errno));
 			return ret;
@@ -4203,6 +4197,7 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		if (iv_field_sz == 0 || iv_field_sz > 16) {
 			printf("%s[%d] incorrect iv_fileds_size=%ld\n", __func__, __LINE__, iv_field_sz);
 			fclose(fp);
+			close(fd);
 			return ret;
 		}
 
@@ -4211,6 +4206,7 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			 fprintf(stderr, "can't calloc buffer for iv:  %s\n",
 				 strerror(errno));
 			 fclose(fp);
+			 close(fd);
 			 return ret;
 		}
 
@@ -4221,16 +4217,28 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			fprintf(stderr, "Size mismatch reading data into iv buffer [%ld/%ld] %s:  %s\n",
 				sz, iv_field_sz, iv_field_buf, strerror(errno));
 			free(iv_field_buf);
+			close(fd);
 			return ret;
 		}
 	}
 
 	/* get input file data */
 	fp = fopen(in_f_name, "rbx");
-	fp_out = fopen(out_f_name, "ab");
 	if (!fp) {
 		fprintf(stderr, "can't open input %s for reading: %s\n",
 			in_f_name, strerror(errno));
+		close(fd);
+		if (bmode > 0)
+			free(iv_field_buf);
+		return ret;
+	}
+
+	fp_out = fopen(out_f_name, "ab");
+	if (!fp_out) {
+		fprintf(stderr, "can't open input %s for reading: %s\n",
+			out_f_name, strerror(errno));
+		fclose(fp);
+		close(fd);
 		if (bmode > 0)
 			free(iv_field_buf);
 		return ret;
@@ -4238,6 +4246,8 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	if (fstat(fileno(fp), &st)) {
 		fclose(fp);
+		fclose(fp_out);
+		close(fd);
 		fprintf(stderr, "Unable to open input file %s:  %s\n",
 			in_f_name, strerror(errno));
 		if (bmode > 0)
@@ -4248,6 +4258,8 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	input_sz = st.st_size;
 	if (input_sz == 0 || input_sz % 32) {
 		fclose(fp);
+		fclose(fp_out);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 32 byte aligned: %s\n",
 			input_sz, in_f_name);
@@ -4293,6 +4305,9 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
 	if (in_buf == MAP_FAILED)	{
+		fclose(fp);
+		fclose(fp_out);
+		close(fd);
 		perror("mmap");
 		exit(-1);
 	}
@@ -4301,6 +4316,9 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	out_buf = in_buf + (offset*SZ_2M);
 	cached_out_buf = calloc(size, sizeof(uint8_t));
 	if (!cached_out_buf) {
+		fclose(fp);
+		fclose(fp_out);
+		close(fd);
 		fprintf(stderr, "can't calloc buffer for output %s:  %s\n",
 			out_f_name, strerror(errno));
 		free(in_buf);
@@ -4312,6 +4330,9 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	dev_ioctl = (struct intel_fcs_dev_ioctl *)
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
+		fclose(fp);
+		fclose(fp_out);
+		close(fd);
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
 		free(cached_out_buf);
 		munmap(in_buf, alloc_sz);
@@ -4359,16 +4380,7 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		memcpy(cached_out_buf,out_buf,read_sz);
 		if (!ret) {
 			/* save result into output file */
-			
-			if (!fp_out) {
-				fprintf(stderr, "can't open %s for writing: %s\n",
-					out_f_name, strerror(errno));
-				ret = -1;
-			} else {
-				fwrite(cached_out_buf,read_sz,1,fp_out );
-				
-			}
-
+			fwrite(cached_out_buf,read_sz,1,fp_out );
 		}
 		remaining -= read_sz;
 	}
@@ -4420,6 +4432,7 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	/* get input file data */
 	fp = fopen(in_f_name, "rbx");
 	if (!fp) {
+		close(fd);
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			in_f_name, strerror(errno));
 		return ret;
@@ -4427,6 +4440,7 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	if (fstat(fileno(fp), &st)) {
 		fclose(fp);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			in_f_name, strerror(errno));
 		return ret;
@@ -4435,6 +4449,7 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	input_sz = st.st_size;
 	if (input_sz == 0 || input_sz % 8) {
 		fclose(fp);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 8 byte aligned: %s\n",
 			input_sz, in_f_name);
@@ -4454,12 +4469,16 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
 	if (in_buf == MAP_FAILED)	{
+		fclose(fp);
+		close(fd);
 		perror("mmap");
 		exit(-1);
 	}
 
 	out_buf = calloc(AES_CRYPT_CMD_MAX_SZ, sizeof(uint8_t));
 	if (!out_buf) {
+		fclose(fp);
+		close(fd);
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
 		free(in_buf);
@@ -4469,6 +4488,8 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	dev_ioctl = (struct intel_fcs_dev_ioctl *)
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
+		fclose(fp);
+		close(fd);
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
 		free(out_buf);
 		free(in_buf);
@@ -4498,8 +4519,12 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 		sz = fread(in_buf, 1, read_sz, fp);
 		if (sz != read_sz) {
+			fclose(fp);
+			close(fd);
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz, read_sz, in_f_name, strerror(errno));
+			free(out_buf);
+			free(dev_ioctl);
 			munmap(in_buf,alloc_sz);
 			return ret;
 		}
@@ -4511,6 +4536,8 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		ret = dev_ioctl->status;
 
 		if (ret) {
+			fclose(fp);
+			close(fd);
 			printf("ioctl return status=0x%x\n", dev_ioctl->status);
 			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 			memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
@@ -4532,6 +4559,7 @@ static int fcs_sha2_get_digest_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!fp) {
 		fprintf(stderr, "can't open %s for writing: %s\n",
 			out_f_name, strerror(errno));
+		close(fd);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
                 memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
                 free(dev_ioctl);
@@ -4596,6 +4624,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			break;
 	}
 	if (i != 2) {
+		close(fd);
 		fprintf(stderr, "Missing data or mac file in -z option\n");
 		return ret;
 	}
@@ -4603,12 +4632,14 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	/* get data input file data */
 	fp0 = fopen(ptr[0], "rbx");
 	if (!fp0) {
+		close(fd);
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			ptr[0], strerror(errno));
 		return ret;
 	}
 	if (fstat(fileno(fp0), &st0)) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			ptr[0], strerror(errno));
 		return ret;
@@ -4617,6 +4648,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	input_sz0 = st0.st_size;
 	if (input_sz0 == 0 || input_sz0 % 8) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 8 byte aligned: %s\n",
 			input_sz0, ptr[0]);
@@ -4627,6 +4659,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	fp1 = fopen(ptr[1], "rbx");
 	if (!fp1) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			ptr[1], strerror(errno));
 		return ret;
@@ -4634,6 +4667,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (fstat(fileno(fp1), &st1)) {
 		fclose(fp0);
 		fclose(fp1);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			ptr[1], strerror(errno));
 		return ret;
@@ -4642,6 +4676,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (input_sz1 == 0 || input_sz1 % 4) {
 		fclose(fp0);
 		fclose(fp1);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 4 byte aligned: %s\n",
 			input_sz1, ptr[1]);
@@ -4661,6 +4696,9 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
 	if (in_buf == MAP_FAILED)	{
+		fclose(fp0);
+		fclose(fp1);
+		close(fd);
 		perror("mmap");
 		exit(-1);
 	}
@@ -4669,6 +4707,9 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
+		fclose(fp0);
+		fclose(fp1);
+		close(fd);
 		munmap(in_buf,input_sz);
 		return ret;
 	}
@@ -4677,6 +4718,9 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		fclose(fp0);
+		fclose(fp1);
+		close(fd);
 		free(out_buf);
 		munmap(in_buf,input_sz);
 		return ret;
@@ -4728,8 +4772,12 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		if (sz0 != read_sz0) {
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz0, input_sz0, ptr[0], strerror(errno));
+			fclose(fp0);
 			fclose(fp1);
+			close(fd);
 			munmap(in_buf,input_sz);
+			free(out_buf);
+			free(dev_ioctl);
 			return ret;
 		}
 
@@ -4737,7 +4785,12 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		if (sz1 != read_sz1) {
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz1, input_sz1, ptr[1], strerror(errno));
+			fclose(fp0);
+			fclose(fp1);
+			close(fd);
 			munmap(in_buf,input_sz);
+			free(out_buf);
+			free(dev_ioctl);
 			return ret;
 		}
 		
@@ -4748,6 +4801,9 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 		if (ret) {
 			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			fclose(fp0);
+			fclose(fp1);
+			close(fd);
 			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 			memset(out_buf, 0, out_sz);
 			free(dev_ioctl);
@@ -4769,6 +4825,7 @@ static int fcs_mac_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!fp) {
 		fprintf(stderr, "can't open %s for writing: %s\n",
 			out_f_name, strerror(errno));
+		close(fd);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 		memset(out_buf, 0, out_sz);
 		free(dev_ioctl);
@@ -4819,6 +4876,7 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 	/* get input file data */
 	fp = fopen(in_f_name, "rbx");
 	if (!fp) {
+		close(fd);
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			in_f_name, strerror(errno));
 		return ret;
@@ -4826,6 +4884,7 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 
 	if (fstat(fileno(fp), &st)) {
 		fclose(fp);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			in_f_name, strerror(errno));
 		return ret;
@@ -4834,6 +4893,7 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 	input_sz = st.st_size;
 	if (input_sz == 0 || input_sz % 8) {
 		fclose(fp);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 8 byte aligned: %s\n",
 			input_sz, in_f_name);
@@ -4853,6 +4913,8 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 
 	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
 	if (in_buf == MAP_FAILED)	{
+		fclose(fp);
+		close(fd);
 		perror("mmap");
 		exit(-1);
 	}
@@ -4861,6 +4923,8 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 	if (!out_buf) {
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
+		fclose(fp);
+		close(fd);
 		munmap(in_buf,input_sz);
 		return ret;
 	}
@@ -4869,6 +4933,8 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		fclose(fp);
+		close(fd);
 		free(out_buf);
 		munmap(in_buf,alloc_sz);
 		return ret;
@@ -4896,6 +4962,10 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 		if (sz != read_sz) {
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz, read_sz, in_f_name, strerror(errno));
+			fclose(fp);
+			close(fd);
+			free(out_buf);
+			free(dev_ioctl);
 			munmap(in_buf,alloc_sz);
 			return ret;
 		}
@@ -4907,6 +4977,8 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 
 		if (ret) {
 			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			fclose(fp);
+			close(fd);
 			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 			memset(out_buf, 0, AES_CRYPT_CMD_MAX_SZ);
 			free(dev_ioctl);
@@ -4926,6 +4998,7 @@ static int fcs_ecdsa_sha2_data_sign_smmu(uint32_t sid, uint32_t cid, uint32_t ki
 	if (!fp) {
 		fprintf(stderr, "can't open %s for writing: %s\n",
 			out_f_name, strerror(errno));
+		close(fd);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 		free(dev_ioctl);
 		free(out_buf);
@@ -4962,7 +5035,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	size_t input_sz, ud_sz, sig_sz, pk_sz, total_sig_sz;
 	FILE *fp0, *fp1, *fp2, *fp;
 	struct stat st0, st1, st2;
-	uint8_t *in_buf, *out_buf, *t_buf;
+	uint8_t *in_buf, *out_buf;
 	size_t sz0, sz1, sz2;
 	size_t remaining_sz, alloc_sz, read_sz0 = 0, read_sz1 = 0, read_sz2 = 0;
 	int ret = -1;
@@ -4986,6 +5059,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			break;
 	}
 	if (i < 2 || (kid == 0 && i < 3)) {
+		close(fd);
 		fprintf(stderr, "Missing %s file in -z option\n",
 			"data or signature or pubkey file");
 		return ret;
@@ -4995,10 +5069,12 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!fp0) {
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			ptr[0], strerror(errno));
+		close(fd);
 		return ret;
 	}
 	if (fstat(fileno(fp0), &st0)) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			ptr[0], strerror(errno));
 		return ret;
@@ -5006,6 +5082,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	ud_sz = st0.st_size;
 	if (ud_sz == 0 || ud_sz % 8) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 8 byte aligned: %s\n",
 			ud_sz, ptr[0]);
@@ -5015,6 +5092,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	fp1 = fopen(ptr[1], "rbx");
 	if (!fp1) {
 		fclose(fp0);
+		close(fd);
 		fprintf(stderr, "can't open %s for reading: %s\n",
 			ptr[1], strerror(errno));
 		return ret;
@@ -5022,6 +5100,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (fstat(fileno(fp1), &st1)) {
 		fclose(fp0);
 		fclose(fp1);
+		close(fd);
 		fprintf(stderr, "Unable to open file %s:  %s\n",
 			ptr[1], strerror(errno));
 		return ret;
@@ -5030,6 +5109,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (sig_sz == 0 || sig_sz % 4) {
 		fclose(fp0);
 		fclose(fp1);
+		close(fd);
 		fprintf(stderr,
 			"File size (%ld) is empty or not 4 byte aligned: %s\n",
 			sig_sz, ptr[1]);
@@ -5041,6 +5121,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		if (!fp2) {
 			fclose(fp0);
 			fclose(fp1);
+			close(fd);
 			fprintf(stderr, "can't open %s for reading: %s\n",
 				ptr[2], strerror(errno));
 			return ret;
@@ -5049,6 +5130,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			fclose(fp0);
 			fclose(fp1);
 			fclose(fp2);
+			close(fd);
 			fprintf(stderr, "Unable to open file %s:  %s\n",
 				ptr[2], strerror(errno));
 			return ret;
@@ -5058,6 +5140,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			fclose(fp0);
 			fclose(fp1);
 			fclose(fp2);
+			close(fd);
 			fprintf(stderr,
 				"File size (%ld) is empty or not 4 byte aligned: %s\n",
 				pk_sz, ptr[2]);
@@ -5087,12 +5170,22 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 	in_buf = mmap(0, (alloc_sz), PROT_READ|PROT_WRITE, MAP_SHARED| MAP_LOCKED, fd, 0);
 	if (in_buf == MAP_FAILED)	{
+		fclose(fp0);
+		fclose(fp1);
+		if(kid == 0)
+			fclose(fp2);
+		close(fd);
 		perror("mmap");
 		exit(-1);
 	}
 
 	out_buf = calloc(32, sizeof(uint8_t));
 	if (!out_buf) {
+		fclose(fp0);
+		fclose(fp1);
+		if(kid == 0)
+			fclose(fp2);
+		close(fd);
 		fprintf(stderr, "can't calloc buffer for %s:  %s\n",
 			out_f_name, strerror(errno));
 		munmap(in_buf,alloc_sz);
@@ -5103,6 +5196,11 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			malloc(sizeof(struct intel_fcs_dev_ioctl));
 	if (!dev_ioctl) {
 		fprintf(stderr, "can't malloc %s:  %s\n", dev, strerror(errno));
+		fclose(fp0);
+		fclose(fp1);
+		if(kid == 0)
+			fclose(fp2);
+		close(fd);
 		free(out_buf);
 		munmap(in_buf,alloc_sz);
 		return ret;
@@ -5157,10 +5255,14 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		if (sz0 != read_sz0) {
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz0, read_sz0, ptr[0], strerror(errno));
+			fclose(fp0);
 			fclose(fp1);
 			if (kid == 0)
 				fclose(fp2);
+			close(fd);
 			munmap(in_buf,alloc_sz);
+			free(out_buf);
+			free(dev_ioctl);
 			return ret;
 		}
 
@@ -5169,8 +5271,12 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 				sz1, read_sz1, ptr[1], strerror(errno));
 			fclose(fp0);
+			fclose(fp1);
 			if (kid == 0)
 				fclose(fp2);
+			close(fd);
+			free(out_buf);
+			free(dev_ioctl);
 			munmap(in_buf,alloc_sz);
 			return ret;
 		}
@@ -5180,6 +5286,12 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 			if (sz2 != read_sz2) {
 				fprintf(stderr, "Size mismatch reading data into buffer [%ld/%ld] %s:  %s\n",
 					sz2, read_sz2, ptr[2], strerror(errno));
+				fclose(fp0);
+				fclose(fp1);
+				fclose(fp2);
+				close(fd);
+				free(out_buf);
+				free(dev_ioctl);
 				munmap(in_buf,alloc_sz);
 				return ret;
 			}
@@ -5191,6 +5303,11 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 
 		if (ret) {
 			printf("ioctl return status=0x%x\n", dev_ioctl->status);
+			fclose(fp0);
+			fclose(fp1);
+			if (kid == 0)
+				fclose(fp2);
+			close(fd);
 			memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 			memset(out_buf, 0, 32);
 			free(dev_ioctl);
@@ -5216,6 +5333,7 @@ static int fcs_ecdsa_sha2_verify_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 	if (!fp) {
 		fprintf(stderr, "can't open %s for writing: %s\n",
 			out_f_name, strerror(errno));
+		close(fd);
 		memset(dev_ioctl, 0, sizeof(struct intel_fcs_dev_ioctl));
 		memset(out_buf, 0, 32);
 		free(dev_ioctl);
@@ -5294,10 +5412,10 @@ int main(int argc, char *argv[])
 	int block_mode = -1;
 	int aes_mode;
 	char *iv_field = NULL;
-	int context_id;
-	int sha_op_mode;
+	int context_id = 0;
+	int sha_op_mode = 0;
 	int sha_dig_sz = 0;
-	int ecc_algo;
+	int ecc_algo = 0;
 	int mbox_cmd_code = -1;
 	uint8_t mbox_urgent = 0;
 	bool smmu_enabled = false;
