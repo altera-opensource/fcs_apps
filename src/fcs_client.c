@@ -41,6 +41,9 @@
 #define SDOS_MAGIC_WORD		0xACBDBDED
 #define SDOS_HEADER_PADDING	0x01020304
 
+#define SDOS_DECRYPTION_ERROR_102	0x102
+#define SDOS_DECRYPTION_ERROR_103	0x103
+
 #define AES_MAX_SIZE		0xE600000	/* set 230 Mb */
 #define HMAC_MAX_SIZE		0x1D600000	/* set 470 Mb */
 #define ECDSA_MAX_SIZE		0x1D600000	/* set 470 Mb */
@@ -723,7 +726,7 @@ static int fcs_service_counter_set(char *filename, int test)
  * Return: 0 on success, or error on failure
  */
 static int print_hash_data(struct fcs_get_provision_data *gpd,
-			   struct fcs_get_counters_data **pcntrs)
+			   struct fcs_get_counters_keyslots_data **pcntrs)
 {
 	int i;
 	int number_of_hashes;
@@ -754,10 +757,10 @@ static int print_hash_data(struct fcs_get_provision_data *gpd,
 	}
 	/* Set the counter pointer to the end of data */
 	if (gpd->header.type_hash == INTEL_FCS_HASH_SECP256)
-		*pcntrs = (struct fcs_get_counters_data *)
+		*pcntrs = (struct fcs_get_counters_keyslots_data *)
 			&(gpd->hash_256[number_of_hashes]);
 	else if (gpd->header.type_hash == INTEL_FCS_HASH_SECP384R1)
-		*pcntrs = (struct fcs_get_counters_data *)
+		*pcntrs = (struct fcs_get_counters_keyslots_data *)
 			&(gpd->hash_384[number_of_hashes]);
 
 	return 0;
@@ -812,7 +815,7 @@ static int fcs_service_get_provision_data(char *filename, int prnt)
 	if (prnt) {
 		struct fcs_get_provision_data *provision = buffer;
 		struct fcs_get_provision_header *hdr = buffer;
-		struct fcs_get_counters_data *pcntrs = NULL;
+		struct fcs_get_counters_keyslots_data *pcntrs = NULL;
 		char no_hash_str[] = "None";
 		char type256_hash_str[] = "secp256r1";
 		char type384_hash_str[] = "secp384r1";
@@ -854,6 +857,10 @@ static int fcs_service_get_provision_data(char *filename, int prnt)
 				pcntrs->svn_count_val1);
 			printf("C2:SVN Counter Value0: 0x%X\n",
 				pcntrs->svn_count_val0);
+			printf("Service Root Key #1 Fuse Status: 0x%X\n",
+				pcntrs->service_root_key_slot_1);
+			printf("Service Root Key #0 Fuse Status: 0x%X\n",
+				pcntrs->service_root_key_slot_0);
 		}
 	}
 
@@ -1199,7 +1206,8 @@ static int fcs_sdos_decrypt(char *filename, char *outfilename, bool verbose)
 	status = dev_ioctl->status;
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 
-	if (status) {
+	if ((status) && (status != SDOS_DECRYPTION_ERROR_102) &&
+	    (status != SDOS_DECRYPTION_ERROR_103)) {
 		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);
@@ -3922,7 +3930,8 @@ static int fcs_sdos_decrypt_ext(uint32_t sid, uint32_t cid,
 	status = dev_ioctl->status;
 	printf("ioctl return status=%d\n", dev_ioctl->status);
 
-	if (status) {
+	if ((status) && (status != SDOS_DECRYPTION_ERROR_102) &&
+	    (status != SDOS_DECRYPTION_ERROR_103)) {
 		memset(in_buf, 0, SDOS_ENCRYPTED_MAX_SZ);
 		memset(out_buf, 0, SDOS_DECRYPTED_MAX_SZ);
 		free(in_buf);

@@ -269,15 +269,30 @@ struct fcs_get_provision_header {
 };
 
 /*
- * struct fcs_get_counters_data - counter data
+ * struct fcs_get_counters_keyslots_data - counter and keyslots data
  * @big_cntr_base_value
  * @big_cntr_count_value
  * @svn_count_val3
  * @svn_count_val2
  * @svn_count_val1
  * @svn_count_val0
+ * @reserved_key_slot5
+ * @reserved_key_slot4
+ * @reserved_key_slot3
+ * @reserved_key_slot2
+ * @service_root_key_slot_1: Service Root Key #1 fuse status:
+ *	0000 = Do not use (to cover old FW encoding)
+ *	0001 = Key slot fuse is available
+ *	0010 = Key slot fuse contains a cancelled key
+ *	1111 = Key slot fuse contains a Service Root Key
+ * @service_root_key_slot_0: Service Root Key #0 fuse status:
+ *	0000 = Do not use (to cover old FW encoding)
+ *	0001 = Key slot fuse is available
+ *	0010 = Key slot fuse contains a cancelled key
+ *	1111 = Key slot fuse contains a Service Root Key
+ * @reserved_key_slot1
  */
-struct fcs_get_counters_data {
+struct fcs_get_counters_keyslots_data {
 #ifdef LITTLE_ENDIAN
 	uint32_t  big_cntr_count_value:24;
 	uint32_t  big_cntr_base_value:8;
@@ -285,6 +300,13 @@ struct fcs_get_counters_data {
 	uint8_t   svn_count_val1;
 	uint8_t   svn_count_val2;
 	uint8_t   svn_count_val3;
+	uint8_t   reserved_key_slot1:4;
+	uint8_t   service_root_key_slot_0:4;
+	uint8_t   service_root_key_slot_1:4;
+	uint8_t   reserved_key_slot2:4;
+	uint8_t   reserved_key_slot3:4;
+	uint8_t   reserved_key_slot4:4;
+	uint8_t   reserved_key_slot5;
 #else
 	uint32_t  big_cntr_base_value:8;
 	uint32_t  big_cntr_count_value:24;
@@ -292,6 +314,13 @@ struct fcs_get_counters_data {
 	uint8_t   svn_count_val2;
 	uint8_t   svn_count_val1;
 	uint8_t   svn_count_val0;
+	uint8_t   reserved_key_slot5;
+	uint8_t   reserved_key_slot4:4;
+	uint8_t   reserved_key_slot3:4;
+	uint8_t   reserved_key_slot2:4;
+	uint8_t   service_root_key_slot_1:4;
+	uint8_t   service_root_key_slot_0:4;
+	uint8_t   reserved_key_slot1:4;
 #endif
 };
 
@@ -310,7 +339,7 @@ struct fcs_get_provision_data {
 		struct fcs_hash_256 hash_256[3];	/* May be 1 to 3 */
 		struct fcs_hash_384 hash_384[3];	/* May be 1 to 3 */
 	};
-	struct fcs_get_counters_data counters;
+	struct fcs_get_counters_keyslots_data counters;
 };
 
 /*
