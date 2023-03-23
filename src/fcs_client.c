@@ -36,6 +36,14 @@
 					 (struct fcs_hps_vab_certificate_data, \
 					  fcs_sha384[0]))
 
+/* Certificate Process Status */
+#define AUTHENTICATION_FAILED	0xF0000003
+#define DEV_NOT_OWNED		0xF0000004
+
+/* Mail Box Response Codes */
+#define MBOX_RESP_AUTHENTICATION_FAIL	0X0A
+#define MBOX_RESP_INVALID_CERTIFICATE	0X80
+
 #define NOT_ALLOWED_UNDER_SECURITY_SETTINGS	0x85
 
 #define SDOS_MAGIC_WORD		0xACBDBDED
@@ -447,6 +455,15 @@ static int fcs_validate_hps_image_buf(const void *cdata, size_t csize,
 	printf("ioctl return status=0x%x size=%d\n",
 		dev_ioctl->status, dev_ioctl->com_paras.s_request.size);
 
+	printf("mbox_status=0x%x\n", dev_ioctl->mbox_status);
+
+	if (dev_ioctl->mbox_status == MBOX_RESP_INVALID_CERTIFICATE || dev_ioctl->mbox_status == MBOX_RESP_AUTHENTICATION_FAIL)
+                dev_ioctl->com_paras.c_request.c_status = AUTHENTICATION_FAILED;
+        else if (dev_ioctl->mbox_status == NOT_ALLOWED_UNDER_SECURITY_SETTINGS)
+                dev_ioctl->com_paras.c_request.c_status = DEV_NOT_OWNED;
+        else
+                dev_ioctl->mbox_status = 0x0;
+
 	status = dev_ioctl->status;
 	if (status)
 		printf("Certificate Error: 0x%X\n",
@@ -702,7 +719,15 @@ static int fcs_service_counter_set(char *filename, int test)
 
 	fcs_send_ioctl_request(dev_ioctl, INTEL_FCS_DEV_SEND_CERTIFICATE);
 
-	printf("ioctl return status=%d\n", dev_ioctl->status);
+	printf("ioctl return status=%d mbox_status=0x%x\n", dev_ioctl->status, dev_ioctl->mbox_status);
+
+	if (dev_ioctl->mbox_status == MBOX_RESP_INVALID_CERTIFICATE || dev_ioctl->mbox_status == MBOX_RESP_AUTHENTICATION_FAIL)
+                 dev_ioctl->com_paras.c_request.c_status = AUTHENTICATION_FAILED;
+        else if (dev_ioctl->mbox_status == NOT_ALLOWED_UNDER_SECURITY_SETTINGS)
+                 dev_ioctl->com_paras.c_request.c_status = DEV_NOT_OWNED;
+        else
+                 dev_ioctl->mbox_status = 0x0;
+
 	status = dev_ioctl->status;
 
 	if (status)
