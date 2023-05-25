@@ -4248,8 +4248,8 @@ static int fcs_aes_crypt_smmu(uint32_t sid, uint32_t cid, uint32_t kid,
 		fclose(fp);
 
 		if (sz != iv_field_sz) {
-			fprintf(stderr, "Size mismatch reading data into iv buffer [%ld/%ld] %s:  %s\n",
-				sz, iv_field_sz, iv_field_buf, strerror(errno));
+			fprintf(stderr, "Size mismatch reading data into iv buffer [%ld/%ld] %.*s:  %s\n",
+				sz, iv_field_sz, 16, iv_field_buf, strerror(errno));
 			free(iv_field_buf);
 			close(fd);
 			return ret;
