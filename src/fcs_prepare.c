@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2020-2021, Intel Corporation
+ * Copyright (C) 2020-2023, Intel Corporation
  */
 
 #include <byteswap.h>
@@ -952,10 +952,10 @@ int main(int argc, char *argv[])
 			error_exit("Invalid Counter Value parameter (Counter value must be from 0 to 64)");
 		if ((counter_sel == 1) && (counter_val > 495))
 			error_exit("Invalid Big Counter parameter (Counter value must be from 0 to 495)");
-		if (counter_val == -1)
+		if (counter_val == -1) {
 			printf("the certificated is fully authenticated, ");
 			printf("will inform SDM processes and enables unauthenticated updates to the PTS counter\n");
-
+		}
 		if (verbose)
 			printf("%s[%d] Counter Set: counter_sel=%d, counter_val=0x%x\n",
 				__func__, __LINE__, counter_sel, counter_val);
