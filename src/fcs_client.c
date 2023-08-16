@@ -356,6 +356,7 @@ static bool fcs_check_smmu_enabled(void)
 		{
 			fprintf(stderr,"file descriptor close failed: %x\n",ret);
 		}
+		errno = 0;
 		return enabled;
 	}
 	else
@@ -5591,6 +5592,8 @@ int main(int argc, char *argv[])
 		case 'd':
 			if (command == INTEL_FCS_DEV_COMMAND_NONE)
 				error_exit("ASOI needs command");
+
+			errno = 0;
 			id = convert_string_to_int(optarg);
 			if (errno)
 				error_exit("ASOI conversion error");
